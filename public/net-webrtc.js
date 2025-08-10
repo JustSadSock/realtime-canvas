@@ -1,14 +1,13 @@
 /* global window, fetch, RTCPeerConnection, WebSocket */
 window.Net = (function(){
-  let cfg=null, sws=null, me=null, roomId=null, iAmHost=false;
+  let cfg=null, sws=null, me=null;
   const peers = new Map(); // peerId -> { pc, dcR, dcU }
-  let onMsg = () => {}, onCursor = () => {};
+  let handlers = { onMsg:()=>{}, onCursor:()=>{}, onPeerOpen:()=>{}, onJoined:()=>{}, onState:()=>{} };
 
   async function loadConfig(){
     if (cfg) return cfg;
     const r = await fetch('config.json', { cache: 'no-store' });
-    cfg = await r.json();
-    return cfg;
+    cfg = await r.json(); return cfg;
   }
   async function ensureWS(){
     await loadConfig();
@@ -21,21 +20,23 @@ window.Net = (function(){
   function wsSend(o){ if (sws && sws.readyState===1) sws.send(JSON.stringify(o)); }
   function signal(to, payload){ wsSend({ type:'signal', to, payload }); }
 
+  function idLess(a,b){ return String(a) < String(b); } // дет. сравнение
+
   function makePeer(peerId, caller){
     if (peers.has(peerId)) return peers.get(peerId);
     const pc = new RTCPeerConnection({ iceServers: [{ urls:'stun:stun.l.google.com:19302' }] });
-    const p = { pc, dcR:null, dcU:null };
+    const p = { pc, dcR:null, dcU:null, opened:false };
     peers.set(peerId, p);
 
     pc.onicecandidate = e => { if (e.candidate) signal(peerId, { ice:e.candidate }); };
     pc.onconnectionstatechange = ()=> console.log('pc', peerId, pc.connectionState);
 
     if (caller){
-      p.dcR = pc.createDataChannel('reliable', { ordered: true });
-      p.dcU = pc.createDataChannel('cursor',   { ordered: false, maxRetransmits: 0 });
+      p.dcR = pc.createDataChannel('reliable', { ordered:true });
+      p.dcU = pc.createDataChannel('cursor',   { ordered:false, maxRetransmits:0 });
       wire(peerId, p);
     } else {
-      pc.ondatachannel = ev => {
+      pc.ondatachannel = ev=>{
         if (ev.channel.label==='reliable') p.dcR = ev.channel;
         if (ev.channel.label==='cursor')   p.dcU = ev.channel;
         wire(peerId, p);
@@ -45,19 +46,24 @@ window.Net = (function(){
   }
 
   function wire(peerId, p){
-    const bind = (ch, handler) => {
+    const bind = (ch, handler)=>{
       if (!ch) return;
-      ch.onopen = ()=> console.log('dc open', peerId, ch.label);
+      ch.onopen = ()=>{
+        console.log('dc open', peerId, ch.label);
+        if (!p.opened && p.dcR && p.dcR.readyState==='open' && p.dcU && p.dcU.readyState==='open'){
+          p.opened = true; handlers.onPeerOpen(peerId);
+        }
+      };
       ch.onclose = ()=> console.log('dc close', peerId, ch.label);
-      ch.onmessage = e => {
+      ch.onmessage = e=>{
         try{
           const payload = JSON.parse(e.data);
           handler({ id: peerId, ...payload });
-        }catch{ /* ignore non-JSON */ }
+        }catch{}
       };
     };
-    bind(p.dcR, msg => onMsg(msg));
-    bind(p.dcU, cur => onCursor(cur));
+    bind(p.dcR, m=> handlers.onMsg(m));
+    bind(p.dcU, c=> handlers.onCursor(c));
   }
 
   async function call(peerId){
@@ -81,39 +87,46 @@ window.Net = (function(){
     }
   }
 
-  async function connect(room, handlers){
-    ({ onMsg = ()=>{}, onCursor = ()=>{} } = handlers || {});
+  async function connect(roomId, h){
+    handlers = Object.assign({ onMsg:()=>{}, onCursor:()=>{}, onPeerOpen:()=>{}, onJoined:()=>{}, onState:()=>{} }, h||{});
     await ensureWS();
-    roomId = room;
     sws.onmessage = (e)=>{
       const m = JSON.parse(e.data);
       if (m.type==='hello'){ /* noop */ }
-      if (m.type==='joined'){ me=m.id; if (iAmHost) (m.peers||[]).forEach(call); }
-      if (m.type==='peer_joined'){ if (iAmHost) call(m.id); }
+      if (m.type==='joined'){
+        me = m.id;
+        handlers.onJoined({ me, peers: m.peers||[] });
+        // дет. дозвон: звоним только тем, чей id больше нашего
+        (m.peers||[]).forEach(pid=>{ if (idLess(me, pid)) call(pid); });
+      }
+      if (m.type==='peer_joined'){
+        // новый пир: звоним ему, если наш id меньше
+        if (idLess(me, m.id)) call(m.id);
+      }
       if (m.type==='peer_left'){ peers.delete(m.id); }
       if (m.type==='signal'){ onSignal(m.from, m.payload); }
+      if (m.type==='state'){ handlers.onState(m.state); } // серверная персистенция
     };
     wsSend({ type:'join', roomId });
   }
 
-  async function rooms(){
-    await ensureWS();
-    return new Promise(res=>{
-      const tmp = new WebSocket(cfg.SIGNAL_URL);
-      tmp.onopen = ()=> tmp.send(JSON.stringify({ type:'list' }));
-      tmp.onmessage = (e)=>{ const m=JSON.parse(e.data); if(m.type==='rooms'){ tmp.close(); res(m.rooms||[]); } };
-    });
-  }
+  // WS-канал для серверного состояния
+  function requestState(){ wsSend({ type:'state_load' }); }
+  function saveState(state){ wsSend({ type:'state_save', state }); }
 
-  function setHost(v){ iAmHost = !!v; }
+  // отправки
   function sendReliable(obj){
     const s = JSON.stringify(obj);
     for (const p of peers.values()) if (p.dcR && p.dcR.readyState==='open') p.dcR.send(s);
+  }
+  function sendReliableTo(peerId, obj){
+    const p = peers.get(peerId);
+    if (p && p.dcR && p.dcR.readyState==='open') p.dcR.send(JSON.stringify(obj));
   }
   function sendCursor(obj){
     const s = JSON.stringify(obj);
     for (const p of peers.values()) if (p.dcU && p.dcU.readyState==='open') p.dcU.send(s);
   }
 
-  return { connect, rooms, setHost, sendReliable, sendCursor };
+  return { connect, requestState, saveState, sendReliable, sendReliableTo, sendCursor };
 })();
