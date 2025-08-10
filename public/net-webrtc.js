@@ -1,4 +1,3 @@
-<script>
 /* global window, fetch, RTCPeerConnection, WebSocket */
 window.Net = (function(){
   let cfg=null, sws=null, me=null, roomId=null, iAmHost=false;
@@ -54,7 +53,7 @@ window.Net = (function(){
         try{
           const payload = JSON.parse(e.data);
           handler({ id: peerId, ...payload });
-        }catch{ /* текст/мусор игнорим */ }
+        }catch{ /* ignore non-JSON */ }
       };
     };
     bind(p.dcR, msg => onMsg(msg));
@@ -88,7 +87,7 @@ window.Net = (function(){
     roomId = room;
     sws.onmessage = (e)=>{
       const m = JSON.parse(e.data);
-      if (m.type==='hello'){ /* ignore */ }
+      if (m.type==='hello'){ /* noop */ }
       if (m.type==='joined'){ me=m.id; if (iAmHost) (m.peers||[]).forEach(call); }
       if (m.type==='peer_joined'){ if (iAmHost) call(m.id); }
       if (m.type==='peer_left'){ peers.delete(m.id); }
@@ -118,5 +117,3 @@ window.Net = (function(){
 
   return { connect, rooms, setHost, sendReliable, sendCursor };
 })();
-</script>
-
