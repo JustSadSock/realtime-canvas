@@ -1,4 +1,6 @@
-// signal.js — HTTP (статика из ./public) + WebSocket-сигналинг WebRTC
+// signal.js — HTTP (раздаёт ./public) + WebSocket-сигналинг WebRTC
+// + простая персистенция состояния комнаты в памяти процесса
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -6,25 +8,35 @@ const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8090;
 
-// ---- HTTP: отдаём ./public
+// ---- HTTP: отдаём ./public (для локальной проверки клиента)
 const server = http.createServer((req, res) => {
-  const reqPath = req.url.split('?')[0];
+  const reqPath = (req.url || '/').split('?')[0];
+  if (reqPath === '/healthz') {
+    res.writeHead(200, {'Content-Type':'text/plain'}); return res.end('ok');
+  }
   const root = path.join(__dirname, 'public');
   let filePath = path.join(root, reqPath === '/' ? 'index.html' : reqPath);
   if (!filePath.startsWith(root)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); return res.end('Not found'); }
-    const ext = path.extname(filePath).slice(1);
-    const mime = { html:'text/html', js:'text/javascript', css:'text/css', json:'application/json', png:'image/png' }[ext] || 'application/octet-stream';
+    const ext = path.extname(filePath).slice(1).toLowerCase();
+    const mime = {
+      html:'text/html', js:'text/javascript', css:'text/css',
+      json:'application/json', png:'image/png', svg:'image/svg+xml'
+    }[ext] || 'application/octet-stream';
     res.writeHead(200, { 'Content-Type': mime });
     res.end(data);
   });
 });
 
-// ---- WS: простейший сигналинг с комнатами
+// ---- WS: сигналинг с комнатами + хранение состояния
 const wss = new WebSocket.Server({ server });
+
 /** roomId -> Set<ws> */
 const rooms = new Map();
+/** roomId -> arbitrary state (например {strokes:[...]}) */
+const roomStates = new Map();
+
 const uid = () => Math.random().toString(36).slice(2, 10);
 const send = (ws, o) => { try { ws.send(JSON.stringify(o)); } catch {} };
 
@@ -32,6 +44,7 @@ wss.on('connection', (ws) => {
   ws.id = uid();
   ws.roomId = null;
   ws.isAlive = true;
+
   send(ws, { type: 'hello', id: ws.id });
 
   ws.on('pong', () => (ws.isAlive = true));
@@ -39,18 +52,28 @@ wss.on('connection', (ws) => {
   ws.on('message', (buf) => {
     let m; try { m = JSON.parse(buf); } catch { return; }
 
+    // список комнат
     if (m.type === 'list') {
       const list = [...rooms.entries()].map(([id, set]) => ({ id, users: set.size }));
       return send(ws, { type: 'rooms', rooms: list });
     }
 
+    // вход в комнату
     if (m.type === 'join') {
       const roomId = String(m.roomId || '').trim();
       if (!roomId) return send(ws, { type: 'join_error', reason: 'empty_room' });
 
-      if (ws.roomId) { // отцепить от старой
+      // отцепим от старой
+      if (ws.roomId) {
         const old = rooms.get(ws.roomId);
-        if (old) { old.delete(ws); for (const c of old) send(c, { type: 'peer_left', id: ws.id }); if (!old.size) rooms.delete(ws.roomId); }
+        if (old) {
+          old.delete(ws);
+          for (const c of old) send(c, { type: 'peer_left', id: ws.id });
+          if (!old.size) {
+            rooms.delete(ws.roomId);
+            // по желанию можно чистить roomStates.delete(ws.roomId)
+          }
+        }
       }
       ws.roomId = roomId;
       if (!rooms.has(roomId)) rooms.set(roomId, new Set());
@@ -64,6 +87,7 @@ wss.on('connection', (ws) => {
       return;
     }
 
+    // пересылка SDP/ICE
     if (m.type === 'signal') {
       if (!ws.roomId) return;
       const room = rooms.get(ws.roomId); if (!room) return;
@@ -75,6 +99,20 @@ wss.on('connection', (ws) => {
       }
       return;
     }
+
+    // ===== хранение состояния комнаты (снэпшот холста) =====
+
+    // клиент просит отдать сохранённое состояние комнаты
+    if (m.type === 'state_load') {
+      const st = ws.roomId ? roomStates.get(ws.roomId) : null;
+      return send(ws, { type:'state', state: st || null });
+    }
+
+    // клиент присылает состояние, сохранить
+    if (m.type === 'state_save') {
+      if (ws.roomId) roomStates.set(ws.roomId, m.state || null);
+      return;
+    }
   });
 
   ws.on('close', () => {
@@ -83,11 +121,14 @@ wss.on('connection', (ws) => {
     if (!room) return;
     room.delete(ws);
     for (const c of room) send(c, { type: 'peer_left', id: ws.id });
-    if (!room.size) rooms.delete(ws.roomId);
+    if (!room.size) {
+      rooms.delete(ws.roomId);
+      // по желанию: roomStates.delete(ws.roomId);
+    }
   });
 });
 
-// heartbeats
+// heartbeats, чтобы не висли зомби
 setInterval(() => {
   for (const ws of wss.clients) {
     if (!ws.isAlive) { try { ws.terminate(); } catch {} }
@@ -96,4 +137,3 @@ setInterval(() => {
 }, 30000);
 
 server.listen(PORT, () => console.log('Signaling HTTP+WS on :' + PORT));
-
