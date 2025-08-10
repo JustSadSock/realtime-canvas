@@ -1,0 +1,72 @@
+<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Realtime Canvas</title>
+<body style="margin:0;background:#0e0f12;color:#eaeaea;font-family:system-ui">
+<div id="lobby" style="padding:16px;max-width:640px;margin:auto">
+  <h2>Комнаты</h2>
+  <div>
+    <input id="room" placeholder="id комнаты" style="padding:8px;border-radius:8px;border:1px solid #2a2f3a;background:#171a1f;color:#eaeaea">
+    <label><input type="checkbox" id="asHost" checked> я — хост</label>
+    <button id="join">Войти</button>
+    <button id="refresh">Обновить список</button>
+  </div>
+  <div id="list" style="margin-top:12px;display:grid;gap:8px"></div>
+</div>
+<canvas id="cvs" style="display:none;position:fixed;inset:0;touch-action:none;background:#0b0c0f"></canvas>
+
+<script src="net-webrtc.js"></script>
+<script>
+const listEl = document.getElementById('list');
+const roomInput = document.getElementById('room');
+const asHost = document.getElementById('asHost');
+const cvs = document.getElementById('cvs'), ctx = cvs.getContext('2d');
+let DPR = Math.max(1, devicePixelRatio||1), camera={x:0,y:0,scale:1}, strokes=[], cursors=new Map();
+
+async function renderRooms(){
+  const rooms = await Net.rooms();
+  listEl.innerHTML='';
+  rooms.forEach(r=>{
+    const b=document.createElement('button');
+    b.textContent = `${r.id} (${r.users})`;
+    b.onclick = ()=> roomInput.value=r.id;
+    listEl.appendChild(b);
+  });
+}
+document.getElementById('refresh').onclick=renderRooms; renderRooms();
+
+document.getElementById('join').onclick = ()=>{
+  const rid = roomInput.value.trim() || 'public-room';
+  Net.setHost(asHost.checked);
+  Net.connect(rid, {
+    onMsg: (op)=> applyOp(op),
+    onCursor: ({id,x,y,drawing,name,color})=> cursors.set(id,{x,y,drawing,name,color,ts:Date.now()})
+  });
+  document.getElementById('lobby').style.display='none';
+  cvs.style.display='block'; resize();
+};
+
+// ======== рисовалка (супер-коротко) ========
+addEventListener('resize', resize); function resize(){ const w=innerWidth,h=innerHeight;cvs.width=w*DPR;cvs.height=h*DPR;cvs.style.width=w+'px';cvs.style.height=h+'px';ctx.setTransform(DPR,0,0,DPR,0,0); }
+let mode='draw', brush={color:'#fff', size:5}, isDown=false, curr=null;
+
+cvs.addEventListener('pointerdown',e=>{cvs.setPointerCapture(e.pointerId); isDown=true; const w=toWorld(e); curr=startStroke(w); send({type:'stroke_start',...curr});});
+cvs.addEventListener('pointermove',e=>{
+  const w=toWorld(e);
+  if(isDown && curr){ curr.points.push(w); applyOp({type:'stroke_pts', id:curr.id, points:[w], size:curr.size, color:curr.color, mode:curr.mode}); send({type:'stroke_pts', id:curr.id, points:[w], size:curr.size, color:curr.color, mode:curr.mode}); }
+  Net.sendCursor({id:'me', x:w.x, y:w.y, drawing:isDown});
+});
+cvs.addEventListener('pointerup',()=>{ if(!curr) return; send({type:'stroke_end', id:curr.id}); curr=null; isDown=false; });
+
+function startStroke(w){ const id=`${Date.now()}-${Math.random().toString(36).slice(2,6)}`; const s={id,mode,color:brush.color,size:brush.size,points:[w]}; strokes.push(s); return s; }
+function applyOp(op){
+  if(op.type==='stroke_pts'){ let s=strokes.find(x=>x.id===op.id); if(!s){ s={id:op.id,mode:op.mode,color:op.color,size:op.size,points:[]}; strokes.push(s); } s.points.push(...op.points); }
+  requestAnimationFrame(draw);
+}
+function toWorld(e){ return {x:(e.clientX/camera.scale+camera.x), y:(e.clientY/camera.scale+camera.y)}; }
+function draw(){
+  ctx.clearRect(0,0,cvs.width/DPR,cvs.height/DPR);
+  for(const s of strokes){ ctx.save(); ctx.lineCap='round'; ctx.lineJoin='round'; ctx.lineWidth=s.size*camera.scale; ctx.strokeStyle=s.color; ctx.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-camera.x)*camera.scale, y=(p.y-camera.y)*camera.scale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);}); ctx.stroke(); ctx.restore(); }
+}
+function send(obj){ Net.sendReliable(obj); }
+</script>
+</body>
