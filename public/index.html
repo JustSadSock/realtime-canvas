@@ -1,31 +1,153 @@
 <!doctype html>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"/>
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
+/>
 <title>Realtime Canvas</title>
 <style>
-  :root{
-    --bg:#ffffff; --fg:#111; --border:#d0d0d0; --panel:#ffffffcc; --muted:#888;
+  :root {
+    --bg: #ffffff;
+    --fg: #111;
+    --border: #d0d0d0;
+    --panel: #ffffffcc;
+    --muted: #888;
   }
-  html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
-  .wrap{max-width:800px;margin:20px auto;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fafafa}
-  input,button,select{background:#fff;color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:16px}
-  button{cursor:pointer} button:active{transform:translateY(1px)}
-  .row{display:flex;gap:8px;flex-wrap:wrap;margin:.5rem 0}
-  #rooms{display:grid;gap:8px;margin-top:8px}
-  #stage{position:fixed;inset:0;display:none}
-  #grid{position:absolute;inset:0;pointer-events:none}
-  #cvs{position:absolute;inset:0;touch-action:none}
-  #toolbar{position:fixed;left:8px;top:8px;display:none;gap:8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px;backdrop-filter:blur(6px);align-items:center}
-  #toolbar .group{display:flex;gap:6px;align-items:center}
-  #toolbar .swatch{width:26px;height:26px;border-radius:6px;border:1px solid var(--border)}
-  #toolbar small{color:var(--muted)}
-  .hint{position:fixed;right:8px;bottom:8px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px 8px;font-size:12px}
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    background: var(--bg);
+    color: var(--fg);
+    font-family:
+      system-ui,
+      -apple-system,
+      Segoe UI,
+      Roboto,
+      Arial;
+  }
+  .wrap {
+    max-width: 800px;
+    margin: 20px auto;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: #fafafa;
+  }
+  input,
+  button,
+  select {
+    background: #fff;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-size: 16px;
+  }
+  button {
+    cursor: pointer;
+  }
+  button:active {
+    transform: translateY(1px);
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 0.5rem 0;
+  }
+  #rooms {
+    display: grid;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  #stage {
+    position: fixed;
+    inset: 0;
+    display: none;
+  }
+  #grid {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+  }
+  #cvs {
+    position: absolute;
+    inset: 0;
+    touch-action: none;
+  }
+  #toolbar {
+    position: fixed;
+    left: 8px;
+    top: 8px;
+    display: none;
+    gap: 8px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px;
+    backdrop-filter: blur(6px);
+    align-items: center;
+  }
+  #toolbar .group {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  #toolbar .swatch {
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  #toolbar small {
+    color: var(--muted);
+  }
+  .hint {
+    position: fixed;
+    right: 8px;
+    bottom: 8px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  button.active,
+  .sz.active,
+  .col.active {
+    outline: 2px solid #007aff;
+  }
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 120px;
+    height: 4px;
+    margin: 0;
+    background: var(--border);
+    border-radius: 2px;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--fg);
+    cursor: pointer;
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border: none;
+    border-radius: 50%;
+    background: var(--fg);
+    cursor: pointer;
+  }
 </style>
 
 <div id="lobby" class="wrap">
   <h2>Комнаты</h2>
   <div class="row">
-    <input id="room" placeholder="id комнаты" style="flex:1" />
+    <input id="room" placeholder="id комнаты" style="flex: 1" />
     <button id="create">Создать</button>
     <button id="join">Войти</button>
   </div>
@@ -55,17 +177,33 @@
   </div>
   <div class="group">
     <small>Цвет</small>
-    <button class="col swatch" data-c="#000000" style="background:#000"></button>
-    <button class="col swatch" data-c="#ff3b30" style="background:#ff3b30"></button>
-    <button class="col swatch" data-c="#34c759" style="background:#34c759"></button>
-    <button class="col swatch" data-c="#007aff" style="background:#007aff"></button>
-    <input id="color" type="color" value="#000000" title="цвет кисти"/>
+    <button
+      class="col swatch"
+      data-c="#000000"
+      style="background: #000"
+    ></button>
+    <button
+      class="col swatch"
+      data-c="#ff3b30"
+      style="background: #ff3b30"
+    ></button>
+    <button
+      class="col swatch"
+      data-c="#34c759"
+      style="background: #34c759"
+    ></button>
+    <button
+      class="col swatch"
+      data-c="#007aff"
+      style="background: #007aff"
+    ></button>
+    <input id="color" type="color" value="#000000" title="цвет кисти" />
   </div>
   <div class="group">
     <small>Фон</small>
-    <input id="bg" type="color" value="#ffffff" title="цвет фона"/>
+    <input id="bg" type="color" value="#ffffff" title="цвет фона" />
     <small>Сетка</small>
-    <input id="gridColor" type="color" value="#f0f0f0" title="цвет сетки"/>
+    <input id="gridColor" type="color" value="#f0f0f0" title="цвет сетки" />
   </div>
   <div class="group">
     <button id="undo" title="Отменить">↶</button>
@@ -74,258 +212,601 @@
   </div>
 </div>
 
-<div class="hint">Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание</div>
+<div class="hint">
+  Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание
+</div>
 
 <script src="net-webrtc.js"></script>
 <script>
-// ===== util =====
-const $ = s=>document.querySelector(s);
-const $$ = s=>Array.from(document.querySelectorAll(s));
-const genId = ()=> `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  // ===== util =====
+  const $ = (s) => document.querySelector(s);
+  const $$ = (s) => Array.from(document.querySelectorAll(s));
+  const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-// ===== canvases & camera =====
-const stage = $('#stage');
-const grid = $('#grid'), gtx = grid.getContext('2d');
-const cvs = $('#cvs'), ctx = cvs.getContext('2d');
-let DPR = Math.max(1, devicePixelRatio||1);
-let camera = { x:0, y:0, scale:1 };
+  // ===== canvases & camera =====
+  const stage = $("#stage");
+  const grid = $("#grid"),
+    gtx = grid.getContext("2d");
+  const cvs = $("#cvs"),
+    ctx = cvs.getContext("2d");
+  let DPR = Math.max(1, devicePixelRatio || 1);
+  let camera = { x: 0, y: 0, scale: 1 };
 
-function resize(){
-  const w = innerWidth, h = innerHeight; DPR = Math.max(1, devicePixelRatio||1);
-  [grid,cvs].forEach(cn=>{ cn.width=w*DPR; cn.height=h*DPR; cn.style.width=w+'px'; cn.style.height=h+'px'; });
-  ctx.setTransform(DPR,0,0,DPR,0,0); gtx.setTransform(DPR,0,0,DPR,0,0);
-  drawGrid(); requestRender();
-}
-addEventListener('resize', resize, {passive:true});
-
-let gridColor = '#f0f0f0';
-function drawGrid(){
-  const w=grid.width/DPR, h=grid.height/DPR;
-  gtx.clearRect(0,0,w,h);
-  const step = 200*camera.scale;
-  if (step>24){
-    gtx.strokeStyle = gridColor;
-    gtx.lineWidth = 1;
-    const sx = -((camera.x*camera.scale)%step), sy = -((camera.y*camera.scale)%step);
-    gtx.beginPath();
-    for(let x=sx;x<w;x+=step){ gtx.moveTo(x,0); gtx.lineTo(x,h); }
-    for(let y=sy;y<h;y+=step){ gtx.moveTo(0,y); gtx.lineTo(w,y); }
-    gtx.stroke();
-  }
-}
-
-// ===== state =====
-let roomId=null, meId=null;
-let mode='draw';
-let brush = { color:'#000000', size:6 };
-let bgColor = '#ffffff';
-
-const strokes = new Map(); // id-> {id,by,mode,color,size,points:[]}
-const cache = new Map();   // полный штрих (для redo/ресинка)
-const myStack = [];        // ids моих штрихов (для undo)
-const redoStack = [];      // ids для redo
-
-// ===== UI wiring =====
-$('#tool-draw').onclick = ()=> mode='draw';
-$('#tool-erase').onclick = ()=> mode='erase';
-$('#tool-pan').onclick = ()=> mode='pan';
-$('#tool-fill').onclick = ()=> { mode='fill'; };
-$('#size').oninput = e=> brush.size = +e.target.value;
-$$('.sz').forEach(b=> b.onclick = ()=> { brush.size=+b.dataset.v; $('#size').value=brush.size; });
-$('#color').oninput = e=> brush.color = e.target.value;
-$$('.col').forEach(b=> b.onclick = ()=> { brush.color=b.dataset.c; $('#color').value=brush.color; });
-$('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave(); };
-$('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
-$('#undo').onclick = undo; $('#redo').onclick = redo;
-$('#export').onclick = exportPNG;
-
-// ===== lobby / rooms =====
-async function getSignalURL(){ const r = await fetch('config.json', {cache:'no-store'}); const j = await r.json(); return j.SIGNAL_URL; }
-async function fetchRooms(){
-  try{
-    const url = await getSignalURL();
-    return await new Promise(res=>{
-      const ws = new WebSocket(url);
-      const t = setTimeout(()=>{ try{ws.close()}catch{}; res([]); }, 2000);
-      ws.onopen = ()=> ws.send(JSON.stringify({type:'list'}));
-      ws.onmessage = e=>{ const m=JSON.parse(e.data); if(m.type==='rooms'){ clearTimeout(t); ws.close(); res(m.rooms||[]); } };
-      ws.onerror = ()=>{ clearTimeout(t); res([]); };
+  function resize() {
+    const w = innerWidth,
+      h = innerHeight;
+    DPR = Math.max(1, devicePixelRatio || 1);
+    [grid, cvs].forEach((cn) => {
+      cn.width = w * DPR;
+      cn.height = h * DPR;
+      cn.style.width = w + "px";
+      cn.style.height = h + "px";
     });
-  }catch{ return []; }
-}
-
-async function renderRooms(){
-  const list = await fetchRooms();
-  const holder = $('#rooms'); holder.innerHTML='';
-  list.forEach(r=>{
-    const b=document.createElement('button'); b.textContent=`${r.id} (${r.users})`; b.onclick=()=> $('#room').value=r.id; holder.appendChild(b);
-  });
-}
-$('#refresh').onclick = renderRooms; renderRooms();
-
-$('#create').onclick = async ()=>{
-  const rid = ($('#room').value.trim() || `room-${Math.random().toString(36).slice(2,6)}`);
-  $('#room').value = rid;
-  // я вешу создание на явный вызов create (реестр на сигналинге)
-  const url = await getSignalURL();
-  const ws = new WebSocket(url);
-  ws.onopen = ()=> ws.send(JSON.stringify({type:'create', roomId: rid}));
-  ws.onmessage = e=>{ const m=JSON.parse(e.data); if(m.type==='created'){ alert('Комната создана'); ws.close(); renderRooms(); } };
-};
-
-$('#join').onclick = ()=>{
-  roomId = ($('#room').value.trim() || 'public-room');
-  lobbyToStage();
-  Net.connect(roomId,{
-    onJoined: ({me, peers})=>{
-      meId = me;
-      // запросим серверный снапшот (если есть)
-      Net.requestState();
-      // если в течение секунды состояние не пришло — поднимем локальное
-      setTimeout(()=>{ if (strokes.size===0) loadLocal(); }, 1000);
-    },
-    onPeerOpen: (peerId)=>{
-      // у только что открывшегося пира попросим снапшот
-      Net.sendReliableTo(peerId, { type:'state_req' });
-    },
-    onState: (state)=>{ if(state) mergeState(state); },
-    onMsg: handleMsg,
-    onCursor: ({id,x,y,drawing})=>{ cursors.set(id,{x,y,drawing,ts:Date.now()}); requestRender(); }
-  });
-};
-
-function lobbyToStage(){
-  document.getElementById('lobby').style.display='none';
-  stage.style.display='block';
-  document.getElementById('toolbar').style.display='flex';
-  resize();
-}
-
-// ===== drawing =====
-let isDown=false, lastMove=null, current=null;
-const cursors = new Map();
-
-cvs.addEventListener('pointerdown', (e)=>{
-  cvs.setPointerCapture(e.pointerId);
-  isDown=true;
-  if (e.button===1 || mode==='pan'){ lastMove={x:e.clientX,y:e.clientY}; return; }
-  const w=toWorld(e);
-  if (mode==='fill'){
-    bgColor = brush.color; requestRender(); debounceSave(); return;
-  }
-  current = { id: genId(), by: meId, mode, color:(mode==='erase'?'#000000':brush.color), size:brush.size, points:[w] };
-  strokes.set(current.id, current); cache.set(current.id, current); myStack.push(current.id); redoStack.length=0;
-  enqueue({ type:'stroke_pts', id: current.id, by: meId, mode: current.mode, color: current.color, size: current.size, points:[w] });
-  requestRender();
-});
-
-cvs.addEventListener('pointermove', (e)=>{
-  const w=toWorld(e);
-  if (e.buttons===4 || (isDown && (e.button===1 || mode==='pan'))){
-    if (lastMove){ camera.x -= (e.clientX-lastMove.x)/camera.scale; camera.y -= (e.clientY-lastMove.y)/camera.scale; drawGrid(); requestRender(); }
-    lastMove={x:e.clientX,y:e.clientY}; return;
-  }
-  if(isDown && current && (mode==='draw' || mode==='erase')){
-    current.points.push(w);
-    enqueue({ type:'stroke_pts', id: current.id, by: meId, mode: current.mode, color: current.color, size: current.size, points:[w] });
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    gtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    drawGrid();
     requestRender();
   }
-  Net.sendCursor({ x:w.x, y:w.y, drawing:isDown });
-});
+  addEventListener("resize", resize, { passive: true });
 
-cvs.addEventListener('pointerup', ()=>{ isDown=false; lastMove=null; current=null; });
-
-// зум/пан колесом
-cvs.addEventListener('wheel', (e)=>{
-  e.preventDefault();
-  const mouse = { clientX:e.clientX, clientY:e.clientY };
-  if (e.shiftKey){ camera.x -= e.deltaX / camera.scale; camera.y -= e.deltaY / camera.scale; drawGrid(); requestRender(); return; }
-  const before = toWorld(mouse);
-  const k = Math.pow(1.0015, -e.deltaY);
-  camera.scale = clamp(camera.scale * k, 0.1, 8);
-  const after = toWorld(mouse);
-  camera.x += before.x - after.x; camera.y += before.y - after.y;
-  drawGrid(); requestRender();
-},{passive:false});
-
-function toWorld(e){ return { x: e.clientX/camera.scale + camera.x, y: e.clientY/camera.scale + camera.y }; }
-const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
-
-// батчинг сетевых событий
-const buffer=[]; let flushTimer=null;
-function enqueue(op){
-  buffer.push(op);
-  if(!flushTimer){ flushTimer=setTimeout(()=>{ Net.sendReliable({ type:'batch', ops: buffer.splice(0, buffer.length) }); flushTimer=null; }, 20); }
-}
-
-// основной рендер
-let rerender=false; function requestRender(){ rerender=true; }
-function loop(){ if(rerender){ draw(); rerender=false; } requestAnimationFrame(loop); } loop();
-function draw(){
-  const w=cvs.width/DPR, h=cvs.height/DPR;
-  ctx.clearRect(0,0,w,h); ctx.fillStyle=bgColor; ctx.fillRect(0,0,w,h);
-  for(const s of strokes.values()){
-    ctx.save(); ctx.lineJoin='round'; ctx.lineCap='round';
-    ctx.globalCompositeOperation = (s.mode==='erase')?'destination-out':'source-over';
-    ctx.strokeStyle=s.color; ctx.lineWidth=s.size*camera.scale;
-    ctx.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-camera.x)*camera.scale, y=(p.y-camera.y)*camera.scale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke(); ctx.restore();
-  }
-  // курсоры
-  const now=Date.now();
-  for(const [id,c] of cursors){ if(now-c.ts>3000) continue; const x=(c.x-camera.x)*camera.scale, y=(c.y-camera.y)*camera.scale; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fillStyle='#007aff'; ctx.fill(); }
-}
-
-// сетевые сообщения
-function handleMsg(op){
-  if(op.type==='batch'){ for(const a of op.ops) handleMsg(a); return; }
-  if(op.type==='stroke_pts'){
-    let s = strokes.get(op.id);
-    if(!s){ s = { id:op.id, by:op.by, mode:op.mode, color:op.color, size:op.size, points:[] }; strokes.set(op.id, s); cache.set(op.id, s); }
-    for(const p of op.points) s.points.push(p);
-    requestRender(); debounceSave(); return;
-  }
-  if(op.type==='del'){ strokes.delete(op.id); requestRender(); debounceSave(); return; }
-  if(op.type==='add'){ const s = op.stroke; strokes.set(s.id, s); cache.set(s.id, s); requestRender(); debounceSave(); return; }
-  if(op.type==='state_req'){ Net.sendReliableTo(op.id, { type:'state_full', state: serializeState() }); return; }
-  if(op.type==='state_full'){
-    if(op.state) mergeState(op.state); return;
-  }
-}
-
-function serializeState(){ return { bg: bgColor, strokes: Array.from(strokes.values()) }; }
-function mergeState(state){
-  try{
-    if (state.bg) bgColor = state.bg;
-    if (Array.isArray(state.strokes)){
-      for(const s of state.strokes){ if(!strokes.has(s.id)){ strokes.set(s.id, s); cache.set(s.id, s); } }
+  let gridColor = "#f0f0f0";
+  function drawGrid() {
+    const w = grid.width / DPR,
+      h = grid.height / DPR;
+    gtx.clearRect(0, 0, w, h);
+    const step = 200 * camera.scale;
+    if (step > 24) {
+      gtx.strokeStyle = gridColor;
+      gtx.lineWidth = 1;
+      const sx = -((camera.x * camera.scale) % step),
+        sy = -((camera.y * camera.scale) % step);
+      gtx.beginPath();
+      for (let x = sx; x < w; x += step) {
+        gtx.moveTo(x, 0);
+        gtx.lineTo(x, h);
+      }
+      for (let y = sy; y < h; y += step) {
+        gtx.moveTo(0, y);
+        gtx.lineTo(w, y);
+      }
+      gtx.stroke();
     }
-    requestRender(); debounceSave();
-  }catch{}
-}
-
-// undo/redo
-function undo(){ const id = myStack.pop(); if(!id) return; Net.sendReliable({type:'del', id}); strokes.delete(id); redoStack.push(id); requestRender(); debounceSave(); }
-function redo(){ const id = redoStack.pop(); if(!id) return; const s = cache.get(id); if(!s) return; strokes.set(id, s); Net.sendReliable({type:'add', stroke:s}); myStack.push(id); requestRender(); debounceSave(); }
-
-// PNG экспорт
-function exportPNG(){
-  if (strokes.size===0){ alert('Нечего сохранять'); return; }
-  const bb = bboxOfStrokes(); if(!bb){ alert('Нечего сохранять'); return; }
-  const MAX=8192; const width=Math.ceil(bb.maxX-bb.minX), height=Math.ceil(bb.maxY-bb.minY);
-  const scale=Math.min(MAX/width, MAX/height, 1);
-  const off=document.createElement('canvas'); off.width=Math.max(1,Math.floor(width*scale)); off.height=Math.max(1,Math.floor(height*scale));
-  const ox=off.getContext('2d'); ox.fillStyle=bgColor; ox.fillRect(0,0,off.width,off.height);
-  for(const s of strokes.values()){
-    ox.save(); ox.globalCompositeOperation=(s.mode==='erase')?'destination-out':'source-over';
-    ox.strokeStyle=s.color; ox.lineJoin='round'; ox.lineCap='round'; ox.lineWidth=s.size*scale;
-    ox.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-bb.minX)*scale, y=(p.y-bb.minY)*scale; if(i===0) ox.moveTo(x,y); else ox.lineTo(x,y); }); ox.stroke(); ox.restore();
   }
-  off.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='canvas.png'; a.click(); }, 'image/png');
-}
-function bboxOfStrokes(){ let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity, any=false; for(const s of strokes.values()){ for(const p of s.points){ any=true; if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; } } return any?{minX,minY,maxX,maxY}:null; }
 
-// локальная персистенция + серверная
-function saveLocal(){ try{ localStorage.setItem('room:'+roomId, JSON.stringify(serializeState())); }catch{} }
-function loadLocal(){ try{ const j=localStorage.getItem('room:'+roomId); if(j){ const s=JSON.parse(j); if(s) mergeState(s); } }catch{} }
-let saveTimer=null; function debounceSave(){ if(saveTimer) return; saveTimer=setTimeout(()=>{ saveTimer=null; saveLocal(); Net.saveState(serializeState()); }, 300); }
+  // ===== state =====
+  let roomId = null,
+    meId = null;
+  let mode = "draw";
+  let brush = { color: "#000000", size: 6 };
+  let bgColor = "#ffffff";
+
+  const strokes = new Map(); // id-> {id,by,mode,color,size,points:[]}
+  const cache = new Map(); // полный штрих (для redo/ресинка)
+  const myStack = []; // ids моих штрихов (для undo)
+  const redoStack = []; // ids для redo
+
+  // ===== UI wiring =====
+  const toolButtons = [
+    $("#tool-draw"),
+    $("#tool-erase"),
+    $("#tool-pan"),
+    $("#tool-fill"),
+  ];
+  function setMode(m) {
+    mode = m;
+    toolButtons.forEach((b) => {
+      b.classList.toggle("active", b.id === "tool-" + m);
+    });
+  }
+  $("#tool-draw").onclick = () => setMode("draw");
+  $("#tool-erase").onclick = () => setMode("erase");
+  $("#tool-pan").onclick = () => setMode("pan");
+  $("#tool-fill").onclick = () => setMode("fill");
+
+  const sizeButtons = $$(".sz");
+  function setSize(v) {
+    brush.size = v;
+    $("#size").value = v;
+    sizeButtons.forEach((b) => {
+      b.classList.toggle("active", +b.dataset.v === v);
+    });
+  }
+  $("#size").oninput = (e) => setSize(+e.target.value);
+  sizeButtons.forEach((b) => (b.onclick = () => setSize(+b.dataset.v)));
+
+  const colorButtons = $$(".col");
+  function setColor(v) {
+    brush.color = v;
+    $("#color").value = v;
+    colorButtons.forEach((b) => {
+      b.classList.toggle("active", b.dataset.c === v);
+    });
+  }
+  $("#color").oninput = (e) => setColor(e.target.value);
+  colorButtons.forEach((b) => (b.onclick = () => setColor(b.dataset.c)));
+  setMode("draw");
+  setSize(brush.size);
+  setColor(brush.color);
+  $("#bg").oninput = (e) => {
+    bgColor = e.target.value;
+    requestRender();
+    debounceSave();
+  };
+  $("#gridColor").oninput = (e) => {
+    gridColor = e.target.value;
+    drawGrid();
+  };
+  $("#undo").onclick = undo;
+  $("#redo").onclick = redo;
+  $("#export").onclick = exportPNG;
+
+  // ===== lobby / rooms =====
+  async function getSignalURL() {
+    const r = await fetch("config.json", { cache: "no-store" });
+    const j = await r.json();
+    return j.SIGNAL_URL;
+  }
+  async function fetchRooms() {
+    try {
+      const url = await getSignalURL();
+      return await new Promise((res) => {
+        const ws = new WebSocket(url);
+        const t = setTimeout(() => {
+          try {
+            ws.close();
+          } catch {}
+          res([]);
+        }, 2000);
+        ws.onopen = () => ws.send(JSON.stringify({ type: "list" }));
+        ws.onmessage = (e) => {
+          const m = JSON.parse(e.data);
+          if (m.type === "rooms") {
+            clearTimeout(t);
+            ws.close();
+            res(m.rooms || []);
+          }
+        };
+        ws.onerror = () => {
+          clearTimeout(t);
+          res([]);
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  async function renderRooms() {
+    const list = await fetchRooms();
+    const holder = $("#rooms");
+    holder.innerHTML = "";
+    list.forEach((r) => {
+      const b = document.createElement("button");
+      b.textContent = `${r.id} (${r.users})`;
+      b.onclick = () => ($("#room").value = r.id);
+      holder.appendChild(b);
+    });
+  }
+  $("#refresh").onclick = renderRooms;
+  renderRooms();
+
+  $("#create").onclick = async () => {
+    const rid =
+      $("#room").value.trim() ||
+      `room-${Math.random().toString(36).slice(2, 6)}`;
+    $("#room").value = rid;
+    // я вешу создание на явный вызов create (реестр на сигналинге)
+    const url = await getSignalURL();
+    const ws = new WebSocket(url);
+    ws.onopen = () => ws.send(JSON.stringify({ type: "create", roomId: rid }));
+    ws.onmessage = (e) => {
+      const m = JSON.parse(e.data);
+      if (m.type === "created") {
+        alert("Комната создана");
+        ws.close();
+        renderRooms();
+      }
+    };
+  };
+
+  $("#join").onclick = () => {
+    roomId = $("#room").value.trim() || "public-room";
+    lobbyToStage();
+    Net.connect(roomId, {
+      onJoined: ({ me, peers }) => {
+        meId = me;
+        // запросим серверный снапшот (если есть)
+        Net.requestState();
+        // если в течение секунды состояние не пришло — поднимем локальное
+        setTimeout(() => {
+          if (strokes.size === 0) loadLocal();
+        }, 1000);
+      },
+      onPeerOpen: (peerId) => {
+        // у только что открывшегося пира попросим снапшот
+        Net.sendReliableTo(peerId, { type: "state_req" });
+      },
+      onState: (state) => {
+        if (state) mergeState(state);
+      },
+      onMsg: handleMsg,
+      onCursor: ({ id, x, y, drawing, color }) => {
+        cursors.set(id, { x, y, drawing, color, ts: Date.now() });
+        requestRender();
+      },
+    });
+  };
+
+  function lobbyToStage() {
+    document.getElementById("lobby").style.display = "none";
+    stage.style.display = "block";
+    document.getElementById("toolbar").style.display = "flex";
+    resize();
+  }
+
+  // ===== drawing =====
+  let isDown = false,
+    lastMove = null,
+    current = null;
+  const cursors = new Map();
+
+  cvs.addEventListener("pointerdown", (e) => {
+    cvs.setPointerCapture(e.pointerId);
+    isDown = true;
+    if (e.button === 1 || mode === "pan") {
+      lastMove = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    const w = toWorld(e);
+    if (mode === "fill") {
+      bgColor = brush.color;
+      requestRender();
+      debounceSave();
+      return;
+    }
+    current = {
+      id: genId(),
+      by: meId,
+      mode,
+      color: mode === "erase" ? "#000000" : brush.color,
+      size: brush.size,
+      points: [w],
+    };
+    strokes.set(current.id, current);
+    cache.set(current.id, current);
+    myStack.push(current.id);
+    redoStack.length = 0;
+    enqueue({
+      type: "stroke_pts",
+      id: current.id,
+      by: meId,
+      mode: current.mode,
+      color: current.color,
+      size: current.size,
+      points: [w],
+    });
+    requestRender();
+  });
+
+  cvs.addEventListener("pointermove", (e) => {
+    const w = toWorld(e);
+    if (e.buttons === 4 || (isDown && (e.button === 1 || mode === "pan"))) {
+      if (lastMove) {
+        camera.x -= (e.clientX - lastMove.x) / camera.scale;
+        camera.y -= (e.clientY - lastMove.y) / camera.scale;
+        drawGrid();
+        requestRender();
+      }
+      lastMove = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    if (isDown && current && (mode === "draw" || mode === "erase")) {
+      current.points.push(w);
+      enqueue({
+        type: "stroke_pts",
+        id: current.id,
+        by: meId,
+        mode: current.mode,
+        color: current.color,
+        size: current.size,
+        points: [w],
+      });
+      requestRender();
+    }
+    Net.sendCursor({ x: w.x, y: w.y, drawing: isDown, color: brush.color });
+  });
+
+  cvs.addEventListener("pointerup", () => {
+    isDown = false;
+    lastMove = null;
+    current = null;
+  });
+
+  // зум/пан колесом
+  cvs.addEventListener(
+    "wheel",
+    (e) => {
+      e.preventDefault();
+      const mouse = { clientX: e.clientX, clientY: e.clientY };
+      if (e.shiftKey) {
+        camera.x -= e.deltaX / camera.scale;
+        camera.y -= e.deltaY / camera.scale;
+        drawGrid();
+        requestRender();
+        return;
+      }
+      const before = toWorld(mouse);
+      const k = Math.pow(1.0015, -e.deltaY);
+      camera.scale = clamp(camera.scale * k, 0.1, 8);
+      const after = toWorld(mouse);
+      camera.x += before.x - after.x;
+      camera.y += before.y - after.y;
+      drawGrid();
+      requestRender();
+    },
+    { passive: false },
+  );
+
+  function toWorld(e) {
+    return {
+      x: e.clientX / camera.scale + camera.x,
+      y: e.clientY / camera.scale + camera.y,
+    };
+  }
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+  // батчинг сетевых событий
+  const buffer = [];
+  let flushTimer = null;
+  function enqueue(op) {
+    buffer.push(op);
+    if (!flushTimer) {
+      flushTimer = setTimeout(() => {
+        Net.sendReliable({
+          type: "batch",
+          ops: buffer.splice(0, buffer.length),
+        });
+        flushTimer = null;
+      }, 20);
+    }
+  }
+
+  // основной рендер
+  let rerender = false;
+  function requestRender() {
+    rerender = true;
+  }
+  function loop() {
+    if (rerender) {
+      draw();
+      rerender = false;
+    }
+    requestAnimationFrame(loop);
+  }
+  loop();
+  function draw() {
+    const w = cvs.width / DPR,
+      h = cvs.height / DPR;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = bgColor;
+    ctx.fillRect(0, 0, w, h);
+    for (const s of strokes.values()) {
+      ctx.save();
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.globalCompositeOperation =
+        s.mode === "erase" ? "destination-out" : "source-over";
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = s.size * camera.scale;
+      ctx.beginPath();
+      s.points.forEach((p, i) => {
+        const x = (p.x - camera.x) * camera.scale,
+          y = (p.y - camera.y) * camera.scale;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.restore();
+    }
+    // курсоры
+    const now = Date.now();
+    for (const [id, c] of cursors) {
+      if (now - c.ts > 3000) continue;
+      const x = (c.x - camera.x) * camera.scale,
+        y = (c.y - camera.y) * camera.scale;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(-Math.PI / 4);
+      ctx.fillStyle = c.color || "#007aff";
+      ctx.fillRect(-5, -2, 10, 4);
+      ctx.beginPath();
+      ctx.moveTo(5, -3);
+      ctx.lineTo(8, 0);
+      ctx.lineTo(5, 3);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // сетевые сообщения
+  function handleMsg(op) {
+    if (op.type === "batch") {
+      for (const a of op.ops) handleMsg(a);
+      return;
+    }
+    if (op.type === "stroke_pts") {
+      let s = strokes.get(op.id);
+      if (!s) {
+        s = {
+          id: op.id,
+          by: op.by,
+          mode: op.mode,
+          color: op.color,
+          size: op.size,
+          points: [],
+        };
+        strokes.set(op.id, s);
+        cache.set(op.id, s);
+      }
+      for (const p of op.points) s.points.push(p);
+      requestRender();
+      debounceSave();
+      return;
+    }
+    if (op.type === "del") {
+      strokes.delete(op.id);
+      requestRender();
+      debounceSave();
+      return;
+    }
+    if (op.type === "add") {
+      const s = op.stroke;
+      strokes.set(s.id, s);
+      cache.set(s.id, s);
+      requestRender();
+      debounceSave();
+      return;
+    }
+    if (op.type === "state_req") {
+      Net.sendReliableTo(op.id, {
+        type: "state_full",
+        state: serializeState(),
+      });
+      return;
+    }
+    if (op.type === "state_full") {
+      if (op.state) mergeState(op.state);
+      return;
+    }
+  }
+
+  function serializeState() {
+    return { bg: bgColor, strokes: Array.from(strokes.values()) };
+  }
+  function mergeState(state) {
+    try {
+      if (state.bg) bgColor = state.bg;
+      if (Array.isArray(state.strokes)) {
+        for (const s of state.strokes) {
+          if (!strokes.has(s.id)) {
+            strokes.set(s.id, s);
+            cache.set(s.id, s);
+          }
+        }
+      }
+      requestRender();
+      debounceSave();
+    } catch {}
+  }
+
+  // undo/redo
+  function undo() {
+    const id = myStack.pop();
+    if (!id) return;
+    Net.sendReliable({ type: "del", id });
+    strokes.delete(id);
+    redoStack.push(id);
+    requestRender();
+    debounceSave();
+  }
+  function redo() {
+    const id = redoStack.pop();
+    if (!id) return;
+    const s = cache.get(id);
+    if (!s) return;
+    strokes.set(id, s);
+    Net.sendReliable({ type: "add", stroke: s });
+    myStack.push(id);
+    requestRender();
+    debounceSave();
+  }
+
+  // PNG экспорт
+  function exportPNG() {
+    if (strokes.size === 0) {
+      alert("Нечего сохранять");
+      return;
+    }
+    const bb = bboxOfStrokes();
+    if (!bb) {
+      alert("Нечего сохранять");
+      return;
+    }
+    const MAX = 8192;
+    const width = Math.ceil(bb.maxX - bb.minX),
+      height = Math.ceil(bb.maxY - bb.minY);
+    const scale = Math.min(MAX / width, MAX / height, 1);
+    const off = document.createElement("canvas");
+    off.width = Math.max(1, Math.floor(width * scale));
+    off.height = Math.max(1, Math.floor(height * scale));
+    const ox = off.getContext("2d");
+    ox.fillStyle = bgColor;
+    ox.fillRect(0, 0, off.width, off.height);
+    for (const s of strokes.values()) {
+      ox.save();
+      ox.globalCompositeOperation =
+        s.mode === "erase" ? "destination-out" : "source-over";
+      ox.strokeStyle = s.color;
+      ox.lineJoin = "round";
+      ox.lineCap = "round";
+      ox.lineWidth = s.size * scale;
+      ox.beginPath();
+      s.points.forEach((p, i) => {
+        const x = (p.x - bb.minX) * scale,
+          y = (p.y - bb.minY) * scale;
+        if (i === 0) ox.moveTo(x, y);
+        else ox.lineTo(x, y);
+      });
+      ox.stroke();
+      ox.restore();
+    }
+    off.toBlob((b) => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = "canvas.png";
+      a.click();
+    }, "image/png");
+  }
+  function bboxOfStrokes() {
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity,
+      any = false;
+    for (const s of strokes.values()) {
+      for (const p of s.points) {
+        any = true;
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
+      }
+    }
+    return any ? { minX, minY, maxX, maxY } : null;
+  }
+
+  // локальная персистенция + серверная
+  function saveLocal() {
+    try {
+      localStorage.setItem("room:" + roomId, JSON.stringify(serializeState()));
+    } catch {}
+  }
+  function loadLocal() {
+    try {
+      const j = localStorage.getItem("room:" + roomId);
+      if (j) {
+        const s = JSON.parse(j);
+        if (s) mergeState(s);
+      }
+    } catch {}
+  }
+  let saveTimer = null;
+  function debounceSave() {
+    if (saveTimer) return;
+    saveTimer = setTimeout(() => {
+      saveTimer = null;
+      saveLocal();
+      Net.saveState(serializeState());
+    }, 300);
+  }
 </script>
