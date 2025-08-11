@@ -91,6 +91,7 @@
     <button id="undo" title="Отменить">↶</button>
     <button id="redo" title="Повторить">↷</button>
     <button id="export" title="Сохранить PNG">🖼️ PNG</button>
+    <button id="import" title="Импорт PNG">📥 Import</button>
     <button id="settingsBtn" title="Настройки">⚙️</button>
   </div>
 </div>
@@ -116,6 +117,7 @@
   <div class="row"><button id="settingsClose">Закрыть</button></div>
 </div>
 
+<script type="module" src="embed-png.js"></script>
 <script src="net-webrtc.js"></script>
 <script>
 // ===== util =====
@@ -215,31 +217,26 @@ $('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave()
 $('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
 $('#undo').onclick = undo; $('#redo').onclick = redo;
 $('#export').onclick = exportPNG;
+$('#import').onclick = ()=> imageLoader.click();
 $('#settingsBtn').onclick = ()=>{ $('#settings').style.display='block'; $$('.hk').forEach(inp=> inp.value=hotkeys[inp.dataset.action]||''); $('#cursorColorInput').value=cursorColor; };
 $('#settingsClose').onclick = ()=>{ $('#settings').style.display='none'; saveSettings(); renderHint(); };
 $$('.hk').forEach(inp=>{ inp.oninput=()=>{ hotkeys[inp.dataset.action]=inp.value; saveSettings(); renderHint(); }; });
 $('#cursorColorInput').oninput = e=>{ cursorColor=e.target.value; updateSelPattern(); saveSettings(); requestRender(); };
-imageLoader.onchange = e=>{
+imageLoader.onchange = async e=>{
   const file=e.target.files[0];
-  if(!file) return;
-  const reader=new FileReader();
-  reader.onload=ev=>{
-    const img=new Image();
-    img.onload=()=>{
-      const pos=screenToWorld(innerWidth/2,innerHeight/2);
-      const id=genId();
-      const s={id,by:meId,mode:'image',x:pos.x,y:pos.y,w:img.width,h:img.height,data:ev.target.result};
-      loadImageForStroke(s);
-      strokes.set(id,s); cache.set(id,s); myStack.push(id); redoStack.length=0;
-      const payload={...s};
-      Net.sendReliable({type:'add',stroke:payload});
-      requestRender(); debounceSave();
-    };
-    img.src=ev.target.result;
-  };
-  reader.readAsDataURL(file);
+  if(file) await importPNG(file);
   e.target.value='';
 };
+document.addEventListener('paste', e=>{
+  const item=[...(e.clipboardData?.items||[])].find(it=>it.type==='image/png');
+  if(item){ const file=item.getAsFile(); if(file) importPNG(file); }
+});
+cvs.addEventListener('dragover', e=>{ e.preventDefault(); });
+cvs.addEventListener('drop', e=>{
+  e.preventDefault();
+  const file=e.dataTransfer.files[0];
+  if(file) importPNG(file);
+});
 
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT') return;
@@ -602,14 +599,22 @@ function handleMsg(op){
 }
 
 function serializeState(){ return { bg: bgColor, strokes: Array.from(strokes.values()) }; }
-function mergeState(state){
+function mergeState(state, opt={}){
+  const added=[]; const setBg = opt.setBg!==false;
   try{
-    if (state.bg) bgColor = state.bg;
+    if (setBg && state.bg) bgColor = state.bg;
     if (Array.isArray(state.strokes)){
-      for(const s of state.strokes){ if(!strokes.has(s.id)){ if(s.mode==='image') loadImageForStroke(s); strokes.set(s.id, s); cache.set(s.id, s); } }
+      for(const s of state.strokes){
+        const ex = strokes.get(s.id);
+        if(!ex || (ex.points && s.points && s.points.length>ex.points.length)){
+          if(s.mode==='image') loadImageForStroke(s);
+          strokes.set(s.id, s); cache.set(s.id, s); added.push(s.id);
+        }
+      }
     }
     requestRender(); debounceSave();
   }catch{}
+  return added;
 }
 
 // undo/redo
@@ -617,25 +622,14 @@ function undo(){ const id = myStack.pop(); if(!id) return; Net.sendReliable({typ
 function redo(){ const id = redoStack.pop(); if(!id) return; const s = cache.get(id); if(!s) return; strokes.set(id, s); const payload={...s}; Net.sendReliable({type:'add', stroke:payload}); myStack.push(id); requestRender(); debounceSave(); }
 
 // PNG экспорт
-function exportPNG(){
+async function exportPNG(){
   if (strokes.size===0){ alert('Нечего сохранять'); return; }
-  const bb = bboxOfStrokes(); if(!bb){ alert('Нечего сохранять'); return; }
-  const MAX=8192; const width=Math.ceil(bb.maxX-bb.minX), height=Math.ceil(bb.maxY-bb.minY);
-  const scale=Math.min(MAX/width, MAX/height, 1);
-  const off=document.createElement('canvas'); off.width=Math.max(1,Math.floor(width*scale)); off.height=Math.max(1,Math.floor(height*scale));
-  const ox=off.getContext('2d'); ox.fillStyle=bgColor; ox.fillRect(0,0,off.width,off.height);
-  for(const s of strokes.values()){
-    if(s.mode==='image'){
-      if(s._img) ox.drawImage(s._img,(s.x-bb.minX)*scale,(s.y-bb.minY)*scale,s.w*scale,s.h*scale);
-      continue;
-    }
-    ox.save(); ox.globalCompositeOperation=(s.mode==='erase')?'destination-out':'source-over';
-    ox.strokeStyle=s.color; ox.lineJoin='round'; ox.lineCap='round'; ox.lineWidth=s.size*scale;
-    ox.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-bb.minX)*scale, y=(p.y-bb.minY)*scale; if(i===0) ox.moveTo(x,y); else ox.lineTo(x,y); }); ox.stroke(); ox.restore();
-  }
-  off.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='canvas.png'; a.click(); }, 'image/png');
+  const blob=await exportEmbeddedPNG();
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='canvas.png';
+  a.click();
 }
-function bboxOfStrokes(){ let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity, any=false; for(const s of strokes.values()){ const b=bboxOfStroke(s); if(b){ any=true; if(b.x<minX)minX=b.x; if(b.y<minY)minY=b.y; if(b.x+b.w>maxX)maxX=b.x+b.w; if(b.y+b.h>maxY)maxY=b.y+b.h; } } return any?{minX,minY,maxX,maxY}:null; }
 
 // локальная персистенция + серверная
 function saveLocal(){ try{ localStorage.setItem('room:'+roomId, JSON.stringify(serializeState())); }catch{} }
