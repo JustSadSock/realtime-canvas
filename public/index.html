@@ -82,6 +82,10 @@
     <input id="color" class="col" type="color" value="#000000" title="цвет кисти"/>
   </div>
   <div class="group">
+    <small>Курсор</small>
+    <input id="cursorColor" type="color" value="#007aff" title="цвет курсора"/>
+  </div>
+  <div class="group">
     <small>Фон</small>
     <input id="bg" type="color" value="#ffffff" title="цвет фона"/>
     <small>Сетка</small>
@@ -141,7 +145,9 @@ let roomId=null, meId=null;
 let mode='draw';
 let brush = { color:'#000000', size:6 };
 let bgColor = '#ffffff';
+let cursorColor = '#007aff';
 let selection=null, selOp=null, selectionPreview=null;
+let pendingImage=null, imgOp=null;
 
 const strokes = new Map(); // id-> {id,by,mode,...}
 const cache = new Map();   // полный штрих (для redo/ресинка)
@@ -181,6 +187,8 @@ colorInputs.forEach(b=> b.onclick = ()=> setColor(b.dataset.c, b));
 setTool(mode);
 setSize(brush.size);
 setColor(brush.color, $('#color'));
+cursorColor = $('#cursorColor').value;
+$('#cursorColor').oninput = e=> { cursorColor=e.target.value; };
 $('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave(); };
 $('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
 $('#undo').onclick = undo; $('#redo').onclick = redo;
@@ -193,13 +201,8 @@ imageLoader.onchange = e=>{
     const img=new Image();
     img.onload=()=>{
       const pos=screenToWorld(innerWidth/2,innerHeight/2);
-      const id=genId();
-      const s={id,by:meId,mode:'image',x:pos.x,y:pos.y,w:img.width,h:img.height,data:ev.target.result};
-      loadImageForStroke(s);
-      strokes.set(id,s); cache.set(id,s); myStack.push(id); redoStack.length=0;
-      const payload={...s};
-      Net.sendReliable({type:'add',stroke:payload});
-      requestRender(); debounceSave();
+      pendingImage={img,x:pos.x,y:pos.y,w:img.width,h:img.height};
+      requestRender();
     };
     img.src=ev.target.result;
   };
@@ -208,6 +211,11 @@ imageLoader.onchange = e=>{
 };
 
 document.addEventListener('keydown',e=>{
+  if(pendingImage){
+    if(e.key==='Enter') finalizePendingImage();
+    else if(e.key==='Escape'){ pendingImage=null; requestRender(); }
+    return;
+  }
   if(e.target.tagName==='INPUT') return;
   if(e.key==='1') setTool('draw');
   else if(e.key==='2') setTool('erase');
@@ -271,7 +279,7 @@ $('#join').onclick = ()=>{
     },
     onState: (state)=>{ if(state) mergeState(state); },
     onMsg: handleMsg,
-    onCursor: ({id,x,y,drawing})=>{ cursors.set(id,{x,y,drawing,ts:Date.now()}); requestRender(); }
+    onCursor: ({id,x,y,drawing,color})=>{ cursors.set(id,{x,y,drawing,color,ts:Date.now()}); requestRender(); }
   });
 };
 
@@ -296,6 +304,16 @@ function getTouchState(){
 }
 
 cvs.addEventListener('pointerdown', (e)=>{
+  if(pendingImage){
+    cvs.setPointerCapture(e.pointerId);
+    const w=toWorld(e);
+    const r={x:pendingImage.x,y:pendingImage.y,w:pendingImage.w,h:pendingImage.h};
+    const corner=hitCorner(w,r,10/camera.scale);
+    if(corner){ imgOp={type:'resize',corner,start:w,rect:{...r}}; }
+    else if(pointInRect(w,r)){ imgOp={type:'move',start:w,rect:{...r}}; }
+    else{ finalizePendingImage(); }
+    return;
+  }
   cvs.setPointerCapture(e.pointerId);
   if(e.pointerType==='touch'){
     touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
@@ -339,6 +357,27 @@ cvs.addEventListener('pointerdown', (e)=>{
 });
 
 cvs.addEventListener('pointermove', (e)=>{
+  if(pendingImage){
+    const w=toWorld(e);
+    if(imgOp){
+      if(imgOp.type==='move'){
+        pendingImage.x=imgOp.rect.x+(w.x-imgOp.start.x);
+        pendingImage.y=imgOp.rect.y+(w.y-imgOp.start.y);
+      }
+      if(imgOp.type==='resize'){
+        const r=imgOp.rect; let x1=r.x, y1=r.y, x2=r.x+r.w, y2=r.y+r.h;
+        if(imgOp.corner.includes('l')) x1=w.x;
+        if(imgOp.corner.includes('r')) x2=w.x;
+        if(imgOp.corner.includes('t')) y1=w.y;
+        if(imgOp.corner.includes('b')) y2=w.y;
+        pendingImage.x=Math.min(x1,x2); pendingImage.y=Math.min(y1,y2);
+        pendingImage.w=Math.abs(x2-x1); pendingImage.h=Math.abs(y2-y1);
+      }
+      requestRender();
+    }
+    Net.sendCursor({x:w.x,y:w.y,drawing:false,color:cursorColor});
+    return;
+  }
   if(e.pointerType==='touch' && touches.has(e.pointerId)){
     touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(touches.size===2 && pinchStart){
@@ -390,17 +429,22 @@ cvs.addEventListener('pointermove', (e)=>{
         }
       }
     }
-    requestRender(); Net.sendCursor({x:w.x,y:w.y,drawing:false}); return;
+    requestRender(); Net.sendCursor({x:w.x,y:w.y,drawing:false,color:cursorColor}); return;
   }
   if(isDown && current && (mode==='draw' || mode==='erase')){
     current.points.push(w);
     enqueue({ type:'stroke_pts', id: current.id, by: meId, mode: current.mode, color: current.color, size: current.size, points:[w] });
     requestRender();
   }
-  Net.sendCursor({ x:w.x, y:w.y, drawing:isDown });
+  Net.sendCursor({ x:w.x, y:w.y, drawing:isDown, color:cursorColor });
 });
 
 cvs.addEventListener('pointerup', (e)=>{
+  if(pendingImage){
+    if(e.pointerType==='touch') touches.delete(e.pointerId);
+    imgOp=null;
+    return;
+  }
   if(e.pointerType==='touch'){
     touches.delete(e.pointerId);
     if(pinchStart){
@@ -499,6 +543,48 @@ function loadImageForStroke(s){
   Object.defineProperty(s,'_img',{value:img,enumerable:false});
 }
 
+function finalizePendingImage(){
+  if(!pendingImage) return;
+  const arr=rasterizeImage(pendingImage);
+  redoStack.length=0;
+  for(const s of arr){
+    strokes.set(s.id,s); cache.set(s.id,s); myStack.push(s.id);
+    const payload={...s};
+    Net.sendReliable({type:'add',stroke:payload});
+  }
+  pendingImage=null;
+  requestRender(); debounceSave();
+}
+
+function rasterizeImage(pi){
+  const off=document.createElement('canvas');
+  off.width=pi.w; off.height=pi.h;
+  const octx=off.getContext('2d');
+  octx.drawImage(pi.img,0,0,pi.w,pi.h);
+  const data=octx.getImageData(0,0,pi.w,pi.h).data;
+  const res=[];
+  for(let y=0;y<pi.h;y++){
+    let x=0;
+    while(x<pi.w){
+      const idx=(y*pi.w+x)*4;
+      const a=data[idx+3];
+      if(a===0){ x++; continue; }
+      const r=data[idx],g=data[idx+1],b=data[idx+2];
+      const color='#'+((1<<24)+(r<<16)+(g<<8)+b).toString(16).slice(1);
+      let x2=x+1;
+      while(x2<pi.w){
+        const j=(y*pi.w+x2)*4;
+        if(data[j]!==r||data[j+1]!==g||data[j+2]!==b||data[j+3]!==a) break;
+        x2++;
+      }
+      const id=genId();
+      res.push({id,by:meId,mode:'draw',color,size:1,points:[{x:pi.x+x,y:pi.y+y},{x:pi.x+x2,y:pi.y+y}]});
+      x=x2;
+    }
+  }
+  return res;
+}
+
 // батчинг сетевых событий
 const buffer=[]; let flushTimer=null;
 function enqueue(op){
@@ -520,11 +606,19 @@ function draw(){
     ctx.strokeStyle=s.color; ctx.lineWidth=s.size*camera.scale;
     ctx.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-camera.x)*camera.scale, y=(p.y-camera.y)*camera.scale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke(); ctx.restore();
   }
+  if(pendingImage){
+    ctx.drawImage(pendingImage.img,(pendingImage.x-camera.x)*camera.scale,(pendingImage.y-camera.y)*camera.scale,pendingImage.w*camera.scale,pendingImage.h*camera.scale);
+    drawSelRect({x:pendingImage.x,y:pendingImage.y,w:pendingImage.w,h:pendingImage.h});
+  }
   if(selection) drawSelRect(selection.rect);
   if(selectionPreview) drawSelRect(selectionPreview);
   // курсоры
   const now=Date.now();
-  for(const [id,c] of cursors){ if(now-c.ts>3000) continue; const x=(c.x-camera.x)*camera.scale, y=(c.y-camera.y)*camera.scale; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fillStyle='#007aff'; ctx.fill(); }
+  for(const [id,c] of cursors){
+    if(now-c.ts>3000) continue;
+    const x=(c.x-camera.x)*camera.scale, y=(c.y-camera.y)*camera.scale;
+    drawMagicWand(x,y,c.color||'#007aff');
+  }
 }
 
 function drawSelRect(r){
@@ -541,6 +635,30 @@ function drawSelRect(r){
   const corners=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]];
   ctx.fillStyle='#fff'; ctx.strokeStyle='#007aff';
   for(const [cx,cy] of corners){ ctx.beginPath(); ctx.rect(cx-hs/2,cy-hs/2,hs,hs); ctx.fill(); ctx.stroke(); }
+  ctx.restore();
+}
+
+function drawMagicWand(x,y,color){
+  const star=4;
+  ctx.save();
+  ctx.strokeStyle=color;
+  ctx.fillStyle=color;
+  ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(x-8,y+8);
+  ctx.lineTo(x+4,y-4);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x+4,y-8);
+  ctx.lineTo(x+4+star,y-4);
+  ctx.lineTo(x+8,y-4);
+  ctx.lineTo(x+4+star,y);
+  ctx.lineTo(x+4,y+4);
+  ctx.lineTo(x+4-star,y);
+  ctx.lineTo(x,y-4);
+  ctx.lineTo(x+4-star,y-4);
+  ctx.closePath();
+  ctx.fill();
   ctx.restore();
 }
 
