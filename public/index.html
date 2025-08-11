@@ -4,12 +4,16 @@
 <title>Realtime Canvas</title>
 <style>
   :root{
-    --bg:#ffffff; --fg:#111; --border:#d0d0d0; --panel:#ffffffcc; --muted:#888;
+    --bg:#fff9fb; --fg:#222; --border:#e0cfe4; --panel:#ffffffcc; --muted:#888; --accent:#ff99cc;
   }
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
-  .wrap{max-width:800px;margin:20px auto;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fafafa}
+  .wrap{max-width:800px;margin:20px auto;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fff}
   input,button,select{background:#fff;color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:16px}
-  button{cursor:pointer} button:active{transform:translateY(1px)}
+  input[type=range]{padding:0}
+  button{cursor:pointer;transition:background .2s,box-shadow .2s} button:active{transform:translateY(1px)}
+  button:hover{background:var(--accent);color:#fff}
+  button.active,.swatch.active,#color.active,.sz.active{box-shadow:0 0 0 3px var(--accent);}
+  .sz.active{background:var(--accent);color:#fff}
   .row{display:flex;gap:8px;flex-wrap:wrap;margin:.5rem 0}
   #rooms{display:grid;gap:8px;margin-top:8px}
   #stage{position:fixed;inset:0;display:none}
@@ -40,10 +44,10 @@
 
 <div id="toolbar">
   <div class="group">
-    <button id="tool-draw" title="Кисть">✏️</button>
-    <button id="tool-erase" title="Ластик">🩹</button>
-    <button id="tool-pan" title="Перемещение">🖐️</button>
-    <button id="tool-fill" title="Заливка фона">🪣</button>
+    <button id="tool-draw" class="tool" title="Кисть">✏️</button>
+    <button id="tool-erase" class="tool" title="Ластик">🩹</button>
+    <button id="tool-pan" class="tool" title="Перемещение">🖐️</button>
+    <button id="tool-fill" class="tool" title="Заливка фона">🪣</button>
   </div>
   <div class="group">
     <small>Толщина</small>
@@ -59,7 +63,7 @@
     <button class="col swatch" data-c="#ff3b30" style="background:#ff3b30"></button>
     <button class="col swatch" data-c="#34c759" style="background:#34c759"></button>
     <button class="col swatch" data-c="#007aff" style="background:#007aff"></button>
-    <input id="color" type="color" value="#000000" title="цвет кисти"/>
+    <input id="color" class="col" type="color" value="#000000" title="цвет кисти"/>
   </div>
   <div class="group">
     <small>Фон</small>
@@ -126,14 +130,25 @@ const myStack = [];        // ids моих штрихов (для undo)
 const redoStack = [];      // ids для redo
 
 // ===== UI wiring =====
-$('#tool-draw').onclick = ()=> mode='draw';
-$('#tool-erase').onclick = ()=> mode='erase';
-$('#tool-pan').onclick = ()=> mode='pan';
-$('#tool-fill').onclick = ()=> { mode='fill'; };
-$('#size').oninput = e=> brush.size = +e.target.value;
-$$('.sz').forEach(b=> b.onclick = ()=> { brush.size=+b.dataset.v; $('#size').value=brush.size; });
-$('#color').oninput = e=> brush.color = e.target.value;
-$$('.col').forEach(b=> b.onclick = ()=> { brush.color=b.dataset.c; $('#color').value=brush.color; });
+const toolButtons = $$('.tool');
+function setTool(t){ mode=t; toolButtons.forEach(btn=>btn.classList.toggle('active', btn.id==='tool-'+t)); }
+$('#tool-draw').onclick = ()=> setTool('draw');
+$('#tool-erase').onclick = ()=> setTool('erase');
+$('#tool-pan').onclick = ()=> setTool('pan');
+$('#tool-fill').onclick = ()=> setTool('fill');
+
+const sizeButtons = $$('.sz');
+function setSize(v){ brush.size=v; $('#size').value=v; sizeButtons.forEach(b=>b.classList.toggle('active', +b.dataset.v===v)); }
+$('#size').oninput = e=> setSize(+e.target.value);
+sizeButtons.forEach(b=> b.onclick = ()=> setSize(+b.dataset.v));
+
+const colorInputs = $$('.col');
+function setColor(c, el){ brush.color=c; $('#color').value=c; colorInputs.forEach(b=>b.classList.toggle('active', b===el)); }
+$('#color').oninput = e=> setColor(e.target.value, $('#color'));
+colorInputs.forEach(b=> b.onclick = ()=> setColor(b.dataset.c, b));
+setTool(mode);
+setSize(brush.size);
+setColor(brush.color, $('#color'));
 $('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave(); };
 $('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
 $('#undo').onclick = undo; $('#redo').onclick = redo;
