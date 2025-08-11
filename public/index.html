@@ -24,6 +24,10 @@
   #toolbar .group{display:flex;gap:6px;align-items:center}
   #toolbar .swatch{width:26px;height:26px;border-radius:6px;border:1px solid var(--border);box-shadow:0 2px 4px rgba(0,0,0,.1)}
   #toolbar small{color:var(--muted)}
+  #toolbar.mobile{left:50%;top:auto;bottom:8px;transform:translateX(-50%);flex-wrap:wrap}
+  #toolbar.mobile .group{flex-wrap:wrap;justify-content:center}
+  #toolbar.mobile button,#toolbar.mobile .swatch,#toolbar.mobile input[type=color]{width:40px;height:40px;font-size:20px;padding:0}
+  #toolbar.mobile~.hint{display:none}
   .hint{position:fixed;right:8px;bottom:8px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px 8px;font-size:12px;box-shadow:0 2px 6px rgba(0,0,0,.1)}
 </style>
 
@@ -80,7 +84,7 @@
   </div>
 </div>
 
-<div class="hint">Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание</div>
+<div class="hint">1-5: инструменты • 6-9: размер кисти • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание</div>
 
 <script src="net-webrtc.js"></script>
 <script>
@@ -133,7 +137,10 @@ const myStack = [];        // ids моих штрихов (для undo)
 const redoStack = [];      // ids для redo
 
 // ===== UI wiring =====
+const toolbar = $('#toolbar');
 const toolButtons = $$('.tool');
+const isMobile = matchMedia('(pointer:coarse)').matches;
+if(isMobile) toolbar.classList.add('mobile');
 function setTool(t){ mode=t; toolButtons.forEach(btn=>btn.classList.toggle('active', btn.id==='tool-'+t)); }
 $('#tool-draw').onclick = ()=> setTool('draw');
 $('#tool-erase').onclick = ()=> setTool('erase');
@@ -157,6 +164,19 @@ $('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave()
 $('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
 $('#undo').onclick = undo; $('#redo').onclick = redo;
 $('#export').onclick = exportPNG;
+
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT') return;
+  if(e.key==='1') setTool('draw');
+  else if(e.key==='2') setTool('erase');
+  else if(e.key==='3') setTool('select');
+  else if(e.key==='4') setTool('pan');
+  else if(e.key==='5') setTool('fill');
+  else if(e.key==='6') setSize(2);
+  else if(e.key==='7') setSize(6);
+  else if(e.key==='8') setSize(12);
+  else if(e.key==='9') setSize(24);
+});
 
 // ===== lobby / rooms =====
 async function getSignalURL(){ const r = await fetch('config.json', {cache:'no-store'}); const j = await r.json(); return j.SIGNAL_URL; }
@@ -223,9 +243,27 @@ function lobbyToStage(){
 // ===== drawing =====
 let isDown=false, lastMove=null, current=null;
 const cursors = new Map();
+const touches = new Map();
+let pinchStart=null;
+
+function getTouchState(){
+  const pts=[...touches.values()];
+  const center={x:(pts[0].x+pts[1].x)/2, y:(pts[0].y+pts[1].y)/2};
+  const dist=Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+  return {center, dist};
+}
 
 cvs.addEventListener('pointerdown', (e)=>{
   cvs.setPointerCapture(e.pointerId);
+  if(e.pointerType==='touch'){
+    touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(touches.size===2){
+      pinchStart={camera:{...camera},...getTouchState()};
+      if(current){ strokes.delete(current.id); cache.delete(current.id); myStack.pop(); enqueue({type:'del',id:current.id}); requestRender(); }
+      isDown=false; current=null;
+      return;
+    }
+  }
   isDown=true;
   if (e.button===1 || mode==='pan'){ lastMove={x:e.clientX,y:e.clientY}; return; }
   const w=toWorld(e);
@@ -248,6 +286,19 @@ cvs.addEventListener('pointerdown', (e)=>{
 });
 
 cvs.addEventListener('pointermove', (e)=>{
+  if(e.pointerType==='touch' && touches.has(e.pointerId)){
+    touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(touches.size===2 && pinchStart){
+      const {center,dist}=getTouchState();
+      const before=screenToWorld(pinchStart.center.x,pinchStart.center.y,pinchStart.camera);
+      camera.scale=clamp(pinchStart.camera.scale*(dist/pinchStart.dist),0.1,8);
+      const after=screenToWorld(center.x,center.y);
+      camera.x+=before.x-after.x; camera.y+=before.y-after.y;
+      drawGrid(); requestRender();
+      return;
+    }
+    if(touches.size>1) return;
+  }
   const w=toWorld(e);
   if (e.buttons===4 || (isDown && (e.button===1 || mode==='pan'))){
     if (lastMove){ camera.x -= (e.clientX-lastMove.x)/camera.scale; camera.y -= (e.clientY-lastMove.y)/camera.scale; drawGrid(); requestRender(); }
@@ -281,6 +332,14 @@ cvs.addEventListener('pointermove', (e)=>{
 });
 
 cvs.addEventListener('pointerup', (e)=>{
+  if(e.pointerType==='touch'){
+    touches.delete(e.pointerId);
+    if(pinchStart){
+      if(touches.size<2) pinchStart=null;
+      isDown=false; current=null; lastMove=null;
+      return;
+    }
+  }
   isDown=false; lastMove=null;
   if(mode==='select' && selOp){
     if(selOp.type==='select' && selOp.rect){
@@ -294,6 +353,8 @@ cvs.addEventListener('pointerup', (e)=>{
   }
   current=null;
 });
+
+cvs.addEventListener('pointercancel', e=>{ touches.delete(e.pointerId); pinchStart=null; });
 
 // зум/пан колесом
 cvs.addEventListener('wheel', (e)=>{
@@ -316,6 +377,7 @@ addEventListener('keydown', e=>{
 });
 
 function toWorld(e){ return { x: e.clientX/camera.scale + camera.x, y: e.clientY/camera.scale + camera.y }; }
+function screenToWorld(x,y,cam=camera){ return { x: x/cam.scale + cam.x, y: y/cam.scale + cam.y }; }
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 function rectFromPoints(a,b){ return {x:Math.min(a.x,b.x), y:Math.min(a.y,b.y), w:Math.abs(a.x-b.x), h:Math.abs(a.y-b.y)}; }
 function pointInRect(p,r){ return p.x>=r.x && p.y>=r.y && p.x<=r.x+r.w && p.y<=r.y+r.h; }
