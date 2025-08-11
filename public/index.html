@@ -91,12 +91,30 @@
     <button id="undo" title="Отменить">↶</button>
     <button id="redo" title="Повторить">↷</button>
     <button id="export" title="Сохранить PNG">🖼️ PNG</button>
+    <button id="settingsBtn" title="Настройки">⚙️</button>
   </div>
 </div>
 
 <input id="imageLoader" type="file" accept="image/png" style="display:none" />
 
-<div class="hint">1-5: инструменты • 6-9: размер кисти • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание</div>
+<div class="hint" id="hint">1-5: инструменты • 6-9: размер кисти • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание</div>
+
+<div id="settings" class="wrap" style="display:none;position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:100;background:#fff;max-width:400px">
+  <h2>Настройки</h2>
+  <div class="row" style="flex-direction:column;gap:4px">
+    <label>Цвет курсора <input id="cursorColorInput" type="color" value="#007aff"/></label>
+    <label>Кисть <input class="hk" data-action="draw" value="1" size="2"/></label>
+    <label>Ластик <input class="hk" data-action="erase" value="2" size="2"/></label>
+    <label>Выделение <input class="hk" data-action="select" value="3" size="2"/></label>
+    <label>Перемещение <input class="hk" data-action="pan" value="4" size="2"/></label>
+    <label>Заливка <input class="hk" data-action="fill" value="5" size="2"/></label>
+    <label>Размер 2 <input class="hk" data-action="size2" value="6" size="2"/></label>
+    <label>Размер 6 <input class="hk" data-action="size6" value="7" size="2"/></label>
+    <label>Размер 12 <input class="hk" data-action="size12" value="8" size="2"/></label>
+    <label>Размер 24 <input class="hk" data-action="size24" value="9" size="2"/></label>
+  </div>
+  <div class="row"><button id="settingsClose">Закрыть</button></div>
+</div>
 
 <script src="net-webrtc.js"></script>
 <script>
@@ -142,11 +160,23 @@ let mode='draw';
 let brush = { color:'#000000', size:6 };
 let bgColor = '#ffffff';
 let selection=null, selOp=null, selectionPreview=null;
+let cursorColor='#007aff';
+const defaultHotkeys={draw:'1',erase:'2',select:'3',pan:'4',fill:'5',size2:'6',size6:'7',size12:'8',size24:'9'};
+let hotkeys={...defaultHotkeys};
+function loadSettings(){ try{ const s=JSON.parse(localStorage.getItem('settings')); if(s){ if(s.hotkeys) Object.assign(hotkeys,s.hotkeys); if(s.cursorColor) cursorColor=s.cursorColor; } }catch{} }
+function saveSettings(){ try{ localStorage.setItem('settings',JSON.stringify({hotkeys,cursorColor})); }catch{} }
+loadSettings();
+function renderHint(){ $('#hint').textContent=`Кисть: ${hotkeys.draw} • Ластик: ${hotkeys.erase} • Выделение: ${hotkeys.select} • Перемещение: ${hotkeys.pan} • Заливка: ${hotkeys.fill} • Размер: ${hotkeys.size2}/${hotkeys.size6}/${hotkeys.size12}/${hotkeys.size24} • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание`; }
+renderHint();
 
 const strokes = new Map(); // id-> {id,by,mode,...}
 const cache = new Map();   // полный штрих (для redo/ресинка)
 const myStack = [];        // ids моих штрихов (для undo)
 const redoStack = [];      // ids для redo
+
+const patternCanvas=document.createElement('canvas'); patternCanvas.width=8; patternCanvas.height=8; const ptx=patternCanvas.getContext('2d');
+let selPattern=null; function updateSelPattern(){ ptx.clearRect(0,0,8,8); ptx.strokeStyle=cursorColor; ptx.lineWidth=1; ptx.beginPath(); ptx.moveTo(0,0); ptx.lineTo(8,8); ptx.moveTo(0,8); ptx.lineTo(8,0); ptx.stroke(); selPattern=ctx.createPattern(patternCanvas,'repeat'); }
+updateSelPattern();
 
 // ===== UI wiring =====
 const toolbar = $('#toolbar');
@@ -185,6 +215,10 @@ $('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave()
 $('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
 $('#undo').onclick = undo; $('#redo').onclick = redo;
 $('#export').onclick = exportPNG;
+$('#settingsBtn').onclick = ()=>{ $('#settings').style.display='block'; $$('.hk').forEach(inp=> inp.value=hotkeys[inp.dataset.action]||''); $('#cursorColorInput').value=cursorColor; };
+$('#settingsClose').onclick = ()=>{ $('#settings').style.display='none'; saveSettings(); renderHint(); };
+$$('.hk').forEach(inp=>{ inp.oninput=()=>{ hotkeys[inp.dataset.action]=inp.value; saveSettings(); renderHint(); }; });
+$('#cursorColorInput').oninput = e=>{ cursorColor=e.target.value; updateSelPattern(); saveSettings(); requestRender(); };
 imageLoader.onchange = e=>{
   const file=e.target.files[0];
   if(!file) return;
@@ -209,15 +243,16 @@ imageLoader.onchange = e=>{
 
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT') return;
-  if(e.key==='1') setTool('draw');
-  else if(e.key==='2') setTool('erase');
-  else if(e.key==='3') setTool('select');
-  else if(e.key==='4') setTool('pan');
-  else if(e.key==='5') setTool('fill');
-  else if(e.key==='6') setSize(2);
-  else if(e.key==='7') setSize(6);
-  else if(e.key==='8') setSize(12);
-  else if(e.key==='9') setSize(24);
+  const k=e.key;
+  if(k===hotkeys.draw) setTool('draw');
+  else if(k===hotkeys.erase) setTool('erase');
+  else if(k===hotkeys.select) setTool('select');
+  else if(k===hotkeys.pan) setTool('pan');
+  else if(k===hotkeys.fill) setTool('fill');
+  else if(k===hotkeys.size2) setSize(2);
+  else if(k===hotkeys.size6) setSize(6);
+  else if(k===hotkeys.size12) setSize(12);
+  else if(k===hotkeys.size24) setSize(24);
 });
 
 // ===== lobby / rooms =====
@@ -328,8 +363,8 @@ cvs.addEventListener('pointerdown', (e)=>{
     requestRender(); debounceSave(); return;
   }
   if (mode==='select'){
-    if(selection){ const r=selection.rect; const hit=pointInRect(w,r); const corner=hitCorner(w,r,10/camera.scale); if(corner){ selOp={type:'resize',corner,start:w,rect:{...r}}; } else if(hit){ selOp={type:'move',start:w,rect:{...r}}; } else { selection=null; selOp={type:'select',start:w}; } }
-    else { selOp={type:'select',start:w}; }
+    if(selection){ const r=selection.rect; const hit=pointInRect(w,r); const corner=hitCorner(w,r,10/camera.scale); if(corner){ selOp={type:'resize',corner,start:w,rect:{...r},orig:new Map(),path:selection.path.map(p=>({...p}))}; for(const id of selection.ids) selOp.orig.set(id,cloneStroke(strokes.get(id))); } else if(hit){ selOp={type:'move',start:w,rect:{...r},orig:new Map(),path:selection.path.map(p=>({...p}))}; for(const id of selection.ids) selOp.orig.set(id,cloneStroke(strokes.get(id))); } else { selection=null; selOp={type:'select',points:[w]}; } }
+    else { selOp={type:'select',points:[w]}; }
     selectionPreview=null; return;
   }
   current = { id: genId(), by: meId, mode, color:(mode==='erase'?'#000000':brush.color), size:brush.size, points:[w] };
@@ -358,15 +393,16 @@ cvs.addEventListener('pointermove', (e)=>{
     lastMove={x:e.clientX,y:e.clientY}; return;
   }
   if(mode==='select' && isDown && selOp){
-    if(selOp.type==='select'){ selOp.rect=rectFromPoints(selOp.start,w); selectionPreview=selOp.rect; }
+    if(selOp.type==='select'){ selOp.points.push(w); selectionPreview=selOp.points.slice(); }
     if(selOp.type==='move'){
       const dx=w.x-selOp.start.x, dy=w.y-selOp.start.y;
       selection.rect={x:selOp.rect.x+dx,y:selOp.rect.y+dy,w:selOp.rect.w,h:selOp.rect.h};
+      selection.path=selOp.path.map(p=>({x:p.x+dx,y:p.y+dy}));
       for(const id of selection.ids){
-        const s=strokes.get(id);
-        if(s.mode==='fill'){ s.points[0].x+=dx; s.points[0].y+=dy; }
-        else if(s.mode==='image'){ s.x+=dx; s.y+=dy; }
-        else{ for(const p of s.points){ p.x+=dx; p.y+=dy; } }
+        const o=selOp.orig.get(id); const s=strokes.get(id);
+        if(s.mode==='fill'){ s.points[0].x=o.points[0].x+dx; s.points[0].y=o.points[0].y+dy; }
+        else if(s.mode==='image'){ s.x=o.x+dx; s.y=o.y+dy; }
+        else{ s.points=o.points.map(p=>({x:p.x+dx,y:p.y+dy})); }
       }
     }
     if(selOp.type==='resize'){
@@ -375,18 +411,18 @@ cvs.addEventListener('pointermove', (e)=>{
       if(selOp.corner.includes('r')) x2=w.x;
       if(selOp.corner.includes('t')) y1=w.y;
       if(selOp.corner.includes('b')) y2=w.y;
-      selection.rect={x:Math.min(x1,x2),y:Math.min(y1,y2),w:Math.abs(x2-x1),h:Math.abs(y2-y1)};
-      const sx=selection.rect.w/r.w, sy=selection.rect.h/r.h; const ox=r.x, oy=r.y;
+      const rect={x:Math.min(x1,x2),y:Math.min(y1,y2),w:Math.abs(x2-x1),h:Math.abs(y2-y1)};
+      selection.rect=rect;
+      const sx=rect.w/r.w, sy=rect.h/r.h; const ox=r.x, oy=r.y;
+      selection.path=selOp.path.map(p=>({x:rect.x+(p.x-ox)*sx,y:rect.y+(p.y-oy)*sy}));
       for(const id of selection.ids){
-        const s=strokes.get(id);
+        const o=selOp.orig.get(id); const s=strokes.get(id);
         if(s.mode==='fill'){
-          const p=s.points[0]; p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy;
+          const p=o.points[0]; s.points[0].x=rect.x+(p.x-ox)*sx; s.points[0].y=rect.y+(p.y-oy)*sy;
         } else if(s.mode==='image'){
-          const x=s.x, y=s.y;
-          s.x=selection.rect.x+(x-ox)*sx; s.y=selection.rect.y+(y-oy)*sy;
-          s.w*=sx; s.h*=sy;
+          s.x=rect.x+(o.x-ox)*sx; s.y=rect.y+(o.y-oy)*sy; s.w=o.w*sx; s.h=o.h*sy;
         } else {
-          for(const p of s.points){ p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy; }
+          s.points=o.points.map(p=>({x:rect.x+(p.x-ox)*sx,y:rect.y+(p.y-oy)*sy}));
         }
       }
     }
@@ -411,9 +447,9 @@ cvs.addEventListener('pointerup', (e)=>{
   }
   isDown=false; lastMove=null;
   if(mode==='select' && selOp){
-    if(selOp.type==='select' && selOp.rect){
-      selection={ids:[],rect:selOp.rect};
-      for(const [id,s] of strokes){ const bb=bboxOfStroke(s); if(rectsIntersect(bb,selection.rect)) selection.ids.push(id); }
+    if(selOp.type==='select' && selOp.points){
+      const poly=selOp.points; const rect=bboxOfPoints(poly); selection={ids:[],path:poly,rect};
+      for(const [id,s] of strokes){ if(strokeIntersectsPoly(s,poly)) selection.ids.push(id); }
       if(selection.ids.length===0) selection=null;
     } else if(selOp.type==='move' || selOp.type==='resize'){
       if(selection) for(const id of selection.ids){ const s=strokes.get(id); Net.sendReliable({type:'del',id}); const payload={...s}; Net.sendReliable({type:'add',stroke:payload}); }
@@ -459,6 +495,10 @@ function hitCorner(p,r,t){
   if(Math.abs(p.x-x2)<=t && Math.abs(p.y-y2)<=t) return 'br';
   return null;
 }
+function bboxOfPoints(pts){ let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity; for(const p of pts){ if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; } return {x:minX,y:minY,w:maxX-minX,h:maxY-minY}; }
+function pointInPoly(p,poly){ let inside=false; for(let i=0,j=poly.length-1;i<poly.length;j=i++){ const xi=poly[i].x, yi=poly[i].y, xj=poly[j].x, yj=poly[j].y; const intersect=((yi>p.y)!=(yj>p.y)) && (p.x<(xj-xi)*(p.y-yi)/(yj-yi)+xi); if(intersect) inside=!inside; } return inside; }
+function strokeIntersectsPoly(s,poly){ if(s.mode==='image'){ const pts=[{x:s.x,y:s.y},{x:s.x+s.w,y:s.y},{x:s.x,y:s.y+s.h},{x:s.x+s.w,y:s.y+s.h}]; return pts.some(pt=>pointInPoly(pt,poly)); } if(s.mode==='fill'){ return pointInPoly(s.points[0],poly); } return s.points.some(pt=>pointInPoly(pt,poly)); }
+function cloneStroke(s){ return s.mode==='image'?{...s}:{...s,points:s.points.map(p=>({...p}))}; }
 function bboxOfStroke(s){
   if(s.mode==='fill'){ const p=s.points[0]; return {x:p.x-1,y:p.y-1,w:2,h:2}; }
   if(s.mode==='image'){ return {x:s.x,y:s.y,w:s.w,h:s.h}; }
@@ -520,27 +560,23 @@ function draw(){
     ctx.strokeStyle=s.color; ctx.lineWidth=s.size*camera.scale;
     ctx.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-camera.x)*camera.scale, y=(p.y-camera.y)*camera.scale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke(); ctx.restore();
   }
-  if(selection) drawSelRect(selection.rect);
-  if(selectionPreview) drawSelRect(selectionPreview);
+  if(selection) drawSel(selection.path, selection.rect, true);
+  if(selectionPreview) drawSel(selectionPreview, bboxOfPoints(selectionPreview), false);
+  if(selection || selectionPreview) requestRender();
   // курсоры
   const now=Date.now();
-  for(const [id,c] of cursors){ if(now-c.ts>3000) continue; const x=(c.x-camera.x)*camera.scale, y=(c.y-camera.y)*camera.scale; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fillStyle='#007aff'; ctx.fill(); }
+  for(const [id,c] of cursors){ if(now-c.ts>3000) continue; const x=(c.x-camera.x)*camera.scale, y=(c.y-camera.y)*camera.scale; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fillStyle=cursorColor; ctx.fill(); }
 }
 
-function drawSelRect(r){
-  const x=(r.x-camera.x)*camera.scale;
-  const y=(r.y-camera.y)*camera.scale;
-  const w=r.w*camera.scale;
-  const h=r.h*camera.scale;
+function drawSel(path, rect, handles){
   ctx.save();
-  ctx.strokeStyle='#007aff';
-  ctx.setLineDash([8,4]);
-  ctx.strokeRect(x,y,w,h);
-  ctx.setLineDash([]);
-  const hs=6;
-  const corners=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]];
-  ctx.fillStyle='#fff'; ctx.strokeStyle='#007aff';
-  for(const [cx,cy] of corners){ ctx.beginPath(); ctx.rect(cx-hs/2,cy-hs/2,hs,hs); ctx.fill(); ctx.stroke(); }
+  ctx.beginPath();
+  path.forEach((p,i)=>{ const x=(p.x-camera.x)*camera.scale, y=(p.y-camera.y)*camera.scale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); });
+  ctx.closePath();
+  ctx.save();
+  const t=(Date.now()/150)%8; ctx.translate(-t,-t); ctx.fillStyle=selPattern; ctx.fill(); ctx.restore();
+  ctx.strokeStyle=cursorColor; ctx.setLineDash([8,4]); ctx.stroke(); ctx.setLineDash([]);
+  if(handles){ const x=(rect.x-camera.x)*camera.scale, y=(rect.y-camera.y)*camera.scale, w=rect.w*camera.scale, h=rect.h*camera.scale; const hs=6; const corners=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]]; ctx.fillStyle='#fff'; ctx.strokeStyle=cursorColor; for(const [cx,cy] of corners){ ctx.beginPath(); ctx.rect(cx-hs/2,cy-hs/2,hs,hs); ctx.fill(); ctx.stroke(); } }
   ctx.restore();
 }
 
