@@ -236,7 +236,9 @@
     <div id="more-group" class="dropdown">
       <button id="tool-more" title="Другие инструменты">⋯</button>
       <div id="more-menu" class="dropdown-menu">
-        <button id="tool-select" class="tool" title="Выделение"><span class="wand">🪄</span></button>
+        <button id="tool-select" class="tool" title="Выделение">
+          <span class="wand">🪄</span>
+        </button>
         <button id="tool-fill" class="tool" title="Заливка">🪣</button>
         <button id="tool-pipette" class="tool" title="Пипетка">🧪</button>
       </div>
@@ -411,7 +413,8 @@
 
   // ===== state =====
   let roomId = null,
-    meId = null;
+    meId = null; // мой peer id
+  let rev = 0; // ревизия состояния (монотонно растёт)
   let mode = "draw";
   let brush = { color: "#000000", size: 6 };
   let bgColor = "#ffffff";
@@ -716,21 +719,22 @@
     roomId = id;
     lobbyToStage();
     Net.connect(roomId, {
-      onJoined: ({ me, peers }) => {
-        meId = me;
+      onJoined: ({ me, roomId, peers }) => {
+        meId = me; // сохранить мой id
         cursorsMeta.set(me, { color: cursorColor });
         sendPresence();
-        Net.requestState();
+        Net.requestState(); // серверный снапшот
         setTimeout(() => {
           if (strokes.size === 0) loadLocal();
         }, 1000);
       },
       onPeerOpen: (peerId) => {
-        Net.sendReliableTo(peerId, { type: "state_req" });
+        // попросить снапшот адресно и указать кто просит
+        Net.sendReliableTo(peerId, { type: "state_req", id: meId });
         sendPresence();
       },
       onState: (state) => {
-        if (state) mergeState(state);
+        if (state) mergeState(state, { fromServer: true });
       },
       onMsg: handleMsg,
       onCursor: ({ id, x, y, drawing }) => {
@@ -1351,10 +1355,9 @@
     }
     ox.putImageData(outImg, 0, 0);
     const strokesVec = rasterToStrokes(off);
-    const added = mergeState({ strokes: strokesVec }, { setBg: false });
-    for (const id of added) {
-      myStack.push(id);
-      const s = strokes.get(id);
+    mergeState({ strokes: strokesVec });
+    for (const s of strokesVec) {
+      myStack.push(s.id);
       Net.sendReliable({ type: "add", stroke: { ...s } });
     }
     requestRender();
@@ -1585,10 +1588,18 @@
       return;
     }
     if (op.type === "state_req") {
-      Net.sendReliableTo(op.id, {
-        type: "state_full",
-        state: serializeState(),
-      });
+      if (op.id) {
+        Net.sendReliableTo(op.id, {
+          type: "state_full",
+          state: serializeState(),
+        });
+      } else {
+        // на всякий случай (старые клиенты) — широковещательно
+        Net.sendReliable({
+          type: "state_full",
+          state: serializeState(),
+        });
+      }
       return;
     }
     if (op.type === "state_full") {
@@ -1598,31 +1609,39 @@
   }
 
   function serializeState() {
-    return { bg: bgColor, strokes: Array.from(strokes.values()) };
+    // ВАЖНО: не инкрементим здесь — просто возвращаем текущее
+    return { bg: bgColor, strokes: Array.from(strokes.values()), rev };
   }
   function mergeState(state, opt = {}) {
-    const added = [];
-    const setBg = opt.setBg !== false;
     try {
-      if (setBg && state.bg) bgColor = state.bg;
-      if (Array.isArray(state.strokes)) {
+      let changed = false;
+      const oldRev = rev | 0;
+      if (state && typeof state.bg === "string") bgColor = state.bg;
+      if (state && Array.isArray(state.strokes)) {
         for (const s of state.strokes) {
-          const ex = strokes.get(s.id);
-          if (
-            !ex ||
-            (ex.points && s.points && s.points.length > ex.points.length)
-          ) {
+          const had = strokes.get(s.id);
+          if (!had) {
             if (s.mode === "image") loadImageForStroke(s);
             strokes.set(s.id, s);
             cache.set(s.id, s);
-            added.push(s.id);
+            changed = true;
+          } else if ((had.points?.length || 0) < (s.points?.length || 0)) {
+            if (s.mode === "image") loadImageForStroke(s);
+            strokes.set(s.id, s);
+            cache.set(s.id, s);
+            changed = true;
           }
         }
       }
+      // поднять локальную ревизию до серверной/чужой
+      const srvRev = state && typeof state.rev === "number" ? (state.rev | 0) : 0;
+      if (srvRev > rev) rev = srvRev;
       requestRender();
-      debounceSave();
-    } catch {}
-    return added;
+      // ВАЖНО:
+      // - если это серверный state → НЕ сохраняем (чтобы не было петли)
+      // - если это peer state_full (opt.fromServer=false) или локальное изменение → сохраняем
+      if (!opt.fromServer && changed) debounceSave();
+    } catch (e) {}
   }
 
   Object.assign(window, {
@@ -1715,8 +1734,18 @@
     if (saveTimer) return;
     saveTimer = setTimeout(() => {
       saveTimer = null;
+      // инкремент до отправки
+      rev = (rev | 0) + 1;
       saveLocal();
       Net.saveState(serializeState());
     }, 300);
   }
+
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) {
+      // поднимем ревизию и сохраним
+      rev = (rev | 0) + 1;
+      Net.saveState(serializeState());
+    }
+  });
 </script>
