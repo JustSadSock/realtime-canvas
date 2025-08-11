@@ -1,0 +1,19 @@
+{
+  "name": "realtime-canvas",
+  "private": true,
+  "scripts": {
+    "dev": "npx http-server public -p 5173 -c-1",
+    "lint": "npx eslint public --ext .js",
+    "format": "npx prettier -w .",
+    "test": "node tools/protocol-smoke.mjs"
+  },
+  "devDependencies": {
+    "eslint": "^9.1.0",
+    "prettier": "^3.2.5",
+    "http-server": "^14.1.1",
+    "jsdom": "^24.0.0",
+    "png-chunks-extract": "^1.0.0",
+    "png-chunks-encode": "^1.0.0",
+    "pako": "^2.1.0"
+  }
+}

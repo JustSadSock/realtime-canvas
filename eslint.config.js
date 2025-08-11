@@ -1,11 +1,7 @@
 export default [
+  { ignores: ["node_modules/**"] },
   {
-    ignores: ['node_modules/**'],
-    files: ['**/*.js'],
-    languageOptions: { ecmaVersion: 2021, sourceType: 'script' }
+    files: ["public/**/*.js"],
+    languageOptions: { ecmaVersion: 2021, sourceType: "module" },
   },
-  {
-    files: ['public/embed-png.js'],
-    languageOptions: { ecmaVersion: 2021, sourceType: 'module' }
-  }
 ];
