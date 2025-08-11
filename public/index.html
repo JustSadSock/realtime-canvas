@@ -165,6 +165,10 @@
     border: 1px solid var(--border);
     box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   }
+  #toolbar .wand {
+    display: inline-block;
+    transform: rotate(-20deg) scale(1.5);
+  }
   #toolbar small {
     color: var(--muted);
   }
@@ -227,7 +231,7 @@
     <div id="more-group" class="dropdown">
       <button id="tool-more" title="Другие инструменты">⋯</button>
       <div id="more-menu" class="dropdown-menu">
-        <button id="tool-select" class="tool" title="Выделение">🔲</button>
+        <button id="tool-select" class="tool" title="Выделение"><span class="wand">🪄</span></button>
         <button id="tool-fill" class="tool" title="Заливка">🪣</button>
         <button id="tool-pipette" class="tool" title="Пипетка">🧪</button>
         <button id="tool-image" title="Вставить PNG">🖼️</button>
@@ -575,30 +579,30 @@
     if (file) await importPNG(file);
     e.target.value = "";
   };
-  document.addEventListener("paste", (e) => {
+  document.addEventListener("paste", async (e) => {
     const item = [...(e.clipboardData?.items || [])].find(
       (it) => it.type === "image/png",
     );
     if (item) {
       const file = item.getAsFile();
-      if (file) importPNG(file);
+      if (file) await importPNG(file);
     }
   });
   cvs.addEventListener("dragover", (e) => {
     e.preventDefault();
   });
-  cvs.addEventListener("drop", (e) => {
+  cvs.addEventListener("drop", async (e) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file) importPNG(file);
+    if (file) await importPNG(file);
   });
   window.addEventListener("dragover", (e) => {
     e.preventDefault();
   });
-  window.addEventListener("drop", (e) => {
+  window.addEventListener("drop", async (e) => {
     e.preventDefault();
     const f = e.dataTransfer.files[0];
-    if (f) importPNG(f);
+    if (f) await importPNG(f);
   });
 
   document.addEventListener("keydown", (e) => {
@@ -1236,10 +1240,11 @@
     const quant = (v) => ((v / 16) | 0) * 16;
     const out = [];
     const MAX = 50000;
-    let stepY = 1;
+    let stepY = 2;
     let idn = 0;
     while (true) {
       out.length = 0;
+      const lineSize = (stepY + 1) / (camera.scale * DPR);
       for (let y = 0; y < height; y += stepY) {
         let x = 0;
         while (x < width) {
@@ -1271,7 +1276,7 @@
               by: meId,
               mode: "draw",
               color: `rgb(${r},${g},${b})`,
-              size: 1 / (camera.scale * DPR),
+              size: lineSize,
               points: [p0, p1],
             });
             if (out.length > MAX) break;
@@ -1280,7 +1285,7 @@
         }
         if (out.length > MAX) break;
       }
-      if (out.length <= MAX || stepY > 8) break;
+      if (out.length <= MAX || stepY > 16) break;
       stepY *= 2;
     }
     return out;
@@ -1332,32 +1337,14 @@
         }
       }
     }
-    const er = new Uint8Array(W * H);
-    for (let yy = 0; yy < H; yy++) {
-      for (let xx = 0; xx < W; xx++) {
-        let ok = true;
-        for (let dy = -1; dy <= 1; dy++) {
-          for (let dx = -1; dx <= 1; dx++) {
-            const nx = xx + dx,
-              ny = yy + dy;
-            if (nx < 0 || ny < 0 || nx >= W || ny >= H || !dil[ny * W + nx]) {
-              ok = false;
-              break;
-            }
-          }
-          if (!ok) break;
-        }
-        if (ok) er[yy * W + xx] = 1;
-      }
-    }
     const off = document.createElement("canvas");
     off.width = W;
     off.height = H;
     const ox = off.getContext("2d");
     const [r, g, b] = hexToRgb(brush.color);
     const outImg = ox.createImageData(W, H);
-    for (let i = 0; i < er.length; i++) {
-      if (er[i]) {
+    for (let i = 0; i < dil.length; i++) {
+      if (dil[i]) {
         const j = i * 4;
         outImg.data[j] = r;
         outImg.data[j + 1] = g;
@@ -1672,7 +1659,9 @@
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "canvas.png";
+    document.body.appendChild(a);
     a.click();
+    a.remove();
   }
 
   function leaveRoom() {
