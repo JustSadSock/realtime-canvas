@@ -283,12 +283,6 @@
     />
   </div>
   <div class="group">
-    <small>Фон</small>
-    <input id="bg" type="color" value="#ffffff" title="цвет фона" />
-    <small>Сетка</small>
-    <input id="gridColor" type="color" value="#cccccc" title="цвет сетки" />
-  </div>
-  <div class="group">
     <button id="undo" title="Отменить">↶</button>
     <button id="redo" title="Повторить">↷</button>
     <button id="export" title="Сохранить PNG">🖼️ PNG</button>
@@ -321,6 +315,8 @@
 >
   <h2>Настройки</h2>
   <div class="row" style="flex-direction: column; gap: 4px">
+    <label>Цвет фона <input id="bg" type="color" value="#ffffff" /></label>
+    <label>Цвет сетки <input id="gridColor" type="color" value="#cccccc" /></label>
     <label
       >Цвет курсора <input id="cursorColorInput" type="color" value="#007aff"
     /></label>
@@ -391,7 +387,8 @@
   function drawGrid() {
     const w = grid.width / DPR,
       h = grid.height / DPR;
-    gtx.clearRect(0, 0, w, h);
+    gtx.fillStyle = bgColor;
+    gtx.fillRect(0, 0, w, h);
     const step = 100 * camera.scale;
     if (step > 24) {
       gtx.strokeStyle = gridColor;
@@ -539,6 +536,7 @@
   setColor(brush.color, $("#color"));
   $("#bg").oninput = (e) => {
     bgColor = e.target.value;
+    drawGrid();
     requestRender();
     debounceSave();
   };
@@ -1404,8 +1402,6 @@
     const w = cvs.width / DPR,
       h = cvs.height / DPR;
     ctx.clearRect(0, 0, w, h);
-    ctx.fillStyle = bgColor;
-    ctx.fillRect(0, 0, w, h);
     for (const s of strokes.values()) {
       if (s.mode === "fill") {
         applyFillStroke(s);
@@ -1616,7 +1612,10 @@
     try {
       let changed = false;
       const oldRev = rev | 0;
-      if (state && typeof state.bg === "string") bgColor = state.bg;
+      if (state && typeof state.bg === "string") {
+        bgColor = state.bg;
+        drawGrid();
+      }
       if (state && Array.isArray(state.strokes)) {
         for (const s of state.strokes) {
           const had = strokes.get(s.id);
