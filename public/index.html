@@ -22,6 +22,9 @@
   #cvs{position:absolute;inset:0;touch-action:none}
   #toolbar{position:fixed;left:8px;top:8px;display:none;gap:8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px;backdrop-filter:blur(6px);align-items:center;box-shadow:0 4px 10px rgba(0,0,0,.1)}
   #toolbar .group{display:flex;gap:6px;align-items:center}
+  #toolbar .dropdown{position:relative}
+  #toolbar .dropdown-menu{display:none;position:absolute;top:100%;left:0;flex-direction:column;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;gap:6px;box-shadow:0 2px 6px rgba(0,0,0,.1)}
+  #toolbar .dropdown.open .dropdown-menu{display:flex}
   #toolbar .swatch{width:26px;height:26px;border-radius:6px;border:1px solid var(--border);box-shadow:0 2px 4px rgba(0,0,0,.1)}
   #toolbar small{color:var(--muted)}
   #toolbar.mobile{left:50%;top:auto;bottom:8px;transform:translateX(-50%);flex-wrap:wrap}
@@ -51,9 +54,16 @@
   <div class="group">
     <button id="tool-draw" class="tool" title="Кисть">✏️</button>
     <button id="tool-erase" class="tool" title="Ластик">🩹</button>
-    <button id="tool-select" class="tool" title="Выделение">🔲</button>
     <button id="tool-pan" class="tool" title="Перемещение">🖐️</button>
-    <button id="tool-fill" class="tool" title="Заливка">🪣</button>
+    <div id="more-group" class="dropdown">
+      <button id="tool-more" title="Другие инструменты">⋯</button>
+      <div id="more-menu" class="dropdown-menu">
+        <button id="tool-select" class="tool" title="Выделение">🔲</button>
+        <button id="tool-fill" class="tool" title="Заливка">🪣</button>
+        <button id="tool-pipette" class="tool" title="Пипетка">🧪</button>
+        <button id="tool-image" title="Вставить PNG">🖼️</button>
+      </div>
+    </div>
   </div>
   <div class="group">
     <small>Толщина</small>
@@ -83,6 +93,8 @@
     <button id="export" title="Сохранить PNG">🖼️ PNG</button>
   </div>
 </div>
+
+<input id="imageLoader" type="file" accept="image/png" style="display:none" />
 
 <div class="hint">1-5: инструменты • 6-9: размер кисти • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание</div>
 
@@ -131,7 +143,7 @@ let brush = { color:'#000000', size:6 };
 let bgColor = '#ffffff';
 let selection=null, selOp=null, selectionPreview=null;
 
-const strokes = new Map(); // id-> {id,by,mode,color,size,points:[]}
+const strokes = new Map(); // id-> {id,by,mode,...}
 const cache = new Map();   // полный штрих (для redo/ресинка)
 const myStack = [];        // ids моих штрихов (для undo)
 const redoStack = [];      // ids для redo
@@ -144,9 +156,18 @@ if(isMobile) toolbar.classList.add('mobile');
 function setTool(t){ mode=t; toolButtons.forEach(btn=>btn.classList.toggle('active', btn.id==='tool-'+t)); }
 $('#tool-draw').onclick = ()=> setTool('draw');
 $('#tool-erase').onclick = ()=> setTool('erase');
-$('#tool-select').onclick = ()=> setTool('select');
 $('#tool-pan').onclick = ()=> setTool('pan');
+$('#tool-select').onclick = ()=> setTool('select');
 $('#tool-fill').onclick = ()=> setTool('fill');
+$('#tool-pipette').onclick = ()=> setTool('pipette');
+
+const moreGroup = $('#more-group');
+$('#tool-more').onclick = e=>{ e.stopPropagation(); moreGroup.classList.toggle('open'); };
+document.addEventListener('click', e=>{ if(!moreGroup.contains(e.target)) moreGroup.classList.remove('open'); });
+$('#more-menu').onclick = ()=> moreGroup.classList.remove('open');
+
+const imageLoader = $('#imageLoader');
+$('#tool-image').onclick = ()=> imageLoader.click();
 
 const sizeButtons = $$('.sz');
 function setSize(v){ brush.size=v; $('#size').value=v; sizeButtons.forEach(b=>b.classList.toggle('active', +b.dataset.v===v)); }
@@ -164,6 +185,27 @@ $('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave()
 $('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
 $('#undo').onclick = undo; $('#redo').onclick = redo;
 $('#export').onclick = exportPNG;
+imageLoader.onchange = e=>{
+  const file=e.target.files[0];
+  if(!file) return;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const img=new Image();
+    img.onload=()=>{
+      const pos=screenToWorld(innerWidth/2,innerHeight/2);
+      const id=genId();
+      const s={id,by:meId,mode:'image',x:pos.x,y:pos.y,w:img.width,h:img.height,data:ev.target.result};
+      loadImageForStroke(s);
+      strokes.set(id,s); cache.set(id,s); myStack.push(id); redoStack.length=0;
+      const payload={...s};
+      Net.sendReliable({type:'add',stroke:payload});
+      requestRender(); debounceSave();
+    };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+  e.target.value='';
+};
 
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='INPUT') return;
@@ -265,6 +307,17 @@ cvs.addEventListener('pointerdown', (e)=>{
     }
   }
   isDown=true;
+  if(mode==='pipette'){
+    const w=toWorld(e);
+    const x=Math.round((w.x-camera.x)*camera.scale*DPR);
+    const y=Math.round((w.y-camera.y)*camera.scale*DPR);
+    const d=ctx.getImageData(x,y,1,1).data;
+    const c="#"+((1<<24)+(d[0]<<16)+(d[1]<<8)+d[2]).toString(16).slice(1);
+    setColor(c,$('#color'));
+    setTool('draw');
+    isDown=false;
+    return;
+  }
   if (e.button===1 || mode==='pan'){ lastMove={x:e.clientX,y:e.clientY}; return; }
   const w=toWorld(e);
   if (mode==='fill'){
@@ -309,7 +362,12 @@ cvs.addEventListener('pointermove', (e)=>{
     if(selOp.type==='move'){
       const dx=w.x-selOp.start.x, dy=w.y-selOp.start.y;
       selection.rect={x:selOp.rect.x+dx,y:selOp.rect.y+dy,w:selOp.rect.w,h:selOp.rect.h};
-      for(const id of selection.ids){ const s=strokes.get(id); if(s.mode==='fill'){ s.points[0].x+=dx; s.points[0].y+=dy; } else { for(const p of s.points){ p.x+=dx; p.y+=dy; } } }
+      for(const id of selection.ids){
+        const s=strokes.get(id);
+        if(s.mode==='fill'){ s.points[0].x+=dx; s.points[0].y+=dy; }
+        else if(s.mode==='image'){ s.x+=dx; s.y+=dy; }
+        else{ for(const p of s.points){ p.x+=dx; p.y+=dy; } }
+      }
     }
     if(selOp.type==='resize'){
       const r=selOp.rect; let x1=r.x, y1=r.y, x2=r.x+r.w, y2=r.y+r.h;
@@ -319,7 +377,18 @@ cvs.addEventListener('pointermove', (e)=>{
       if(selOp.corner.includes('b')) y2=w.y;
       selection.rect={x:Math.min(x1,x2),y:Math.min(y1,y2),w:Math.abs(x2-x1),h:Math.abs(y2-y1)};
       const sx=selection.rect.w/r.w, sy=selection.rect.h/r.h; const ox=r.x, oy=r.y;
-      for(const id of selection.ids){ const s=strokes.get(id); if(s.mode==='fill'){ const p=s.points[0]; p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy; } else { for(const p of s.points){ p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy; } } }
+      for(const id of selection.ids){
+        const s=strokes.get(id);
+        if(s.mode==='fill'){
+          const p=s.points[0]; p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy;
+        } else if(s.mode==='image'){
+          const x=s.x, y=s.y;
+          s.x=selection.rect.x+(x-ox)*sx; s.y=selection.rect.y+(y-oy)*sy;
+          s.w*=sx; s.h*=sy;
+        } else {
+          for(const p of s.points){ p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy; }
+        }
+      }
     }
     requestRender(); Net.sendCursor({x:w.x,y:w.y,drawing:false}); return;
   }
@@ -347,7 +416,7 @@ cvs.addEventListener('pointerup', (e)=>{
       for(const [id,s] of strokes){ const bb=bboxOfStroke(s); if(rectsIntersect(bb,selection.rect)) selection.ids.push(id); }
       if(selection.ids.length===0) selection=null;
     } else if(selOp.type==='move' || selOp.type==='resize'){
-      if(selection) for(const id of selection.ids){ const s=strokes.get(id); Net.sendReliable({type:'del',id}); Net.sendReliable({type:'add',stroke:s}); }
+      if(selection) for(const id of selection.ids){ const s=strokes.get(id); Net.sendReliable({type:'del',id}); const payload={...s}; Net.sendReliable({type:'add',stroke:payload}); }
     }
     selOp=null; selectionPreview=null; requestRender(); debounceSave(); current=null; return;
   }
@@ -392,6 +461,7 @@ function hitCorner(p,r,t){
 }
 function bboxOfStroke(s){
   if(s.mode==='fill'){ const p=s.points[0]; return {x:p.x-1,y:p.y-1,w:2,h:2}; }
+  if(s.mode==='image'){ return {x:s.x,y:s.y,w:s.w,h:s.h}; }
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity; for(const p of s.points){ if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; }
   return {x:minX,y:minY,w:maxX-minX,h:maxY-minY};
 }
@@ -422,6 +492,13 @@ function applyFillStroke(s){
   ctx.putImageData(img,0,0);
 }
 
+function loadImageForStroke(s){
+  const img=new Image();
+  img.onload=requestRender;
+  img.src=s.data;
+  Object.defineProperty(s,'_img',{value:img,enumerable:false});
+}
+
 // батчинг сетевых событий
 const buffer=[]; let flushTimer=null;
 function enqueue(op){
@@ -437,6 +514,7 @@ function draw(){
   ctx.clearRect(0,0,w,h); ctx.fillStyle=bgColor; ctx.fillRect(0,0,w,h);
   for(const s of strokes.values()){
     if(s.mode==='fill'){ applyFillStroke(s); continue; }
+    if(s.mode==='image'){ if(s._img) ctx.drawImage(s._img,(s.x-camera.x)*camera.scale,(s.y-camera.y)*camera.scale,s.w*camera.scale,s.h*camera.scale); continue; }
     ctx.save(); ctx.lineJoin='round'; ctx.lineCap='round';
     ctx.globalCompositeOperation = (s.mode==='erase')?'destination-out':'source-over';
     ctx.strokeStyle=s.color; ctx.lineWidth=s.size*camera.scale;
@@ -480,7 +558,7 @@ function handleMsg(op){
     strokes.set(op.id,s); cache.set(op.id,s); requestRender(); debounceSave(); return;
   }
   if(op.type==='del'){ strokes.delete(op.id); requestRender(); debounceSave(); return; }
-  if(op.type==='add'){ const s = op.stroke; strokes.set(s.id, s); cache.set(s.id, s); requestRender(); debounceSave(); return; }
+  if(op.type==='add'){ const s = op.stroke; if(s.mode==='image') loadImageForStroke(s); strokes.set(s.id, s); cache.set(s.id, s); requestRender(); debounceSave(); return; }
   if(op.type==='state_req'){ Net.sendReliableTo(op.id, { type:'state_full', state: serializeState() }); return; }
   if(op.type==='state_full'){
     if(op.state) mergeState(op.state); return;
@@ -492,7 +570,7 @@ function mergeState(state){
   try{
     if (state.bg) bgColor = state.bg;
     if (Array.isArray(state.strokes)){
-      for(const s of state.strokes){ if(!strokes.has(s.id)){ strokes.set(s.id, s); cache.set(s.id, s); } }
+      for(const s of state.strokes){ if(!strokes.has(s.id)){ if(s.mode==='image') loadImageForStroke(s); strokes.set(s.id, s); cache.set(s.id, s); } }
     }
     requestRender(); debounceSave();
   }catch{}
@@ -500,7 +578,7 @@ function mergeState(state){
 
 // undo/redo
 function undo(){ const id = myStack.pop(); if(!id) return; Net.sendReliable({type:'del', id}); strokes.delete(id); redoStack.push(id); requestRender(); debounceSave(); }
-function redo(){ const id = redoStack.pop(); if(!id) return; const s = cache.get(id); if(!s) return; strokes.set(id, s); Net.sendReliable({type:'add', stroke:s}); myStack.push(id); requestRender(); debounceSave(); }
+function redo(){ const id = redoStack.pop(); if(!id) return; const s = cache.get(id); if(!s) return; strokes.set(id, s); const payload={...s}; Net.sendReliable({type:'add', stroke:payload}); myStack.push(id); requestRender(); debounceSave(); }
 
 // PNG экспорт
 function exportPNG(){
@@ -511,6 +589,10 @@ function exportPNG(){
   const off=document.createElement('canvas'); off.width=Math.max(1,Math.floor(width*scale)); off.height=Math.max(1,Math.floor(height*scale));
   const ox=off.getContext('2d'); ox.fillStyle=bgColor; ox.fillRect(0,0,off.width,off.height);
   for(const s of strokes.values()){
+    if(s.mode==='image'){
+      if(s._img) ox.drawImage(s._img,(s.x-bb.minX)*scale,(s.y-bb.minY)*scale,s.w*scale,s.h*scale);
+      continue;
+    }
     ox.save(); ox.globalCompositeOperation=(s.mode==='erase')?'destination-out':'source-over';
     ox.strokeStyle=s.color; ox.lineJoin='round'; ox.lineCap='round'; ox.lineWidth=s.size*scale;
     ox.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-bb.minX)*scale, y=(p.y-bb.minY)*scale; if(i===0) ox.moveTo(x,y); else ox.lineTo(x,y); }); ox.stroke(); ox.restore();
