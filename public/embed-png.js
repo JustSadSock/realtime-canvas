@@ -238,6 +238,7 @@ async function startPlacement(imgBlob) {
   let lx = 0;
   let ly = 0;
   overlay.addEventListener("pointerdown", (e) => {
+    if (e.target !== overlay && e.target !== img) return;
     dragging = true;
     lx = e.clientX;
     ly = e.clientY;
@@ -270,8 +271,14 @@ async function startPlacement(imgBlob) {
     },
     { passive: false },
   );
-  placeBtn.onclick = finalizePlacement;
-  cancelBtn.onclick = cleanupPlacement;
+  placeBtn.onclick = (e) => {
+    e.stopPropagation();
+    finalizePlacement();
+  };
+  cancelBtn.onclick = (e) => {
+    e.stopPropagation();
+    cleanupPlacement();
+  };
 }
 
 export async function importPNG(fileOrBlob) {

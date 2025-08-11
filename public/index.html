@@ -227,14 +227,12 @@
   <div class="group">
     <button id="tool-draw" class="tool" title="Кисть">✏️</button>
     <button id="tool-erase" class="tool" title="Ластик">🩹</button>
-    <button id="tool-pan" class="tool" title="Перемещение">🖐️</button>
     <div id="more-group" class="dropdown">
       <button id="tool-more" title="Другие инструменты">⋯</button>
       <div id="more-menu" class="dropdown-menu">
         <button id="tool-select" class="tool" title="Выделение"><span class="wand">🪄</span></button>
         <button id="tool-fill" class="tool" title="Заливка">🪣</button>
         <button id="tool-pipette" class="tool" title="Пипетка">🧪</button>
-        <button id="tool-image" title="Вставить PNG">🖼️</button>
       </div>
     </div>
   </div>
@@ -280,7 +278,7 @@
     <small>Фон</small>
     <input id="bg" type="color" value="#ffffff" title="цвет фона" />
     <small>Сетка</small>
-    <input id="gridColor" type="color" value="#f0f0f0" title="цвет сетки" />
+    <input id="gridColor" type="color" value="#cccccc" title="цвет сетки" />
   </div>
   <div class="group">
     <button id="undo" title="Отменить">↶</button>
@@ -326,9 +324,6 @@
     /></label>
     <label
       >Выделение <input class="hk" data-action="select" value="3" size="2"
-    /></label>
-    <label
-      >Перемещение <input class="hk" data-action="pan" value="4" size="2"
     /></label>
     <label
       >Заливка <input class="hk" data-action="fill" value="5" size="2"
@@ -384,12 +379,12 @@
   }
   addEventListener("resize", resize, { passive: true });
 
-  let gridColor = "#f0f0f0";
+  let gridColor = "#cccccc";
   function drawGrid() {
     const w = grid.width / DPR,
       h = grid.height / DPR;
     gtx.clearRect(0, 0, w, h);
-    const step = 200 * camera.scale;
+    const step = 100 * camera.scale;
     if (step > 24) {
       gtx.strokeStyle = gridColor;
       gtx.lineWidth = 1;
@@ -422,7 +417,6 @@
     draw: "1",
     erase: "2",
     select: "3",
-    pan: "4",
     fill: "5",
     size2: "6",
     size6: "7",
@@ -455,7 +449,7 @@
   loadSettings();
   function renderHint() {
     $("#hint").textContent =
-      `Кисть: ${hotkeys.draw} • Ластик: ${hotkeys.erase} • Выделение: ${hotkeys.select} • Перемещение: ${hotkeys.pan} • Заливка: ${hotkeys.fill} • Размер: ${hotkeys.size2}/${hotkeys.size6}/${hotkeys.size12}/${hotkeys.size24} • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание`;
+      `Кисть: ${hotkeys.draw} • Ластик: ${hotkeys.erase} • Выделение: ${hotkeys.select} • Заливка: ${hotkeys.fill} • Размер: ${hotkeys.size2}/${hotkeys.size6}/${hotkeys.size12}/${hotkeys.size24} • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание`;
   }
   renderHint();
 
@@ -496,7 +490,6 @@
   }
   $("#tool-draw").onclick = () => setTool("draw");
   $("#tool-erase").onclick = () => setTool("erase");
-  $("#tool-pan").onclick = () => setTool("pan");
   $("#tool-select").onclick = () => setTool("select");
   $("#tool-fill").onclick = () => setTool("fill");
   $("#tool-pipette").onclick = () => setTool("pipette");
@@ -512,7 +505,6 @@
   $("#more-menu").onclick = () => moreGroup.classList.remove("open");
 
   const imageLoader = $("#imageLoader");
-  $("#tool-image").onclick = () => imageLoader.click();
 
   const sizeButtons = $$(".sz");
   function setSize(v) {
@@ -611,7 +603,6 @@
     if (k === hotkeys.draw) setTool("draw");
     else if (k === hotkeys.erase) setTool("erase");
     else if (k === hotkeys.select) setTool("select");
-    else if (k === hotkeys.pan) setTool("pan");
     else if (k === hotkeys.fill) setTool("fill");
     else if (k === hotkeys.size2) setSize(2);
     else if (k === hotkeys.size6) setSize(6);
@@ -802,7 +793,7 @@
       isDown = false;
       return;
     }
-    if (e.button === 1 || mode === "pan") {
+    if (e.button === 1) {
       lastMove = { x: e.clientX, y: e.clientY };
       return;
     }
@@ -896,7 +887,7 @@
       if (touches.size > 1) return;
     }
     const w = toWorld(e);
-    if (e.buttons === 4 || (isDown && (e.button === 1 || mode === "pan"))) {
+    if (e.buttons === 4 || (isDown && e.button === 1)) {
       if (lastMove) {
         camera.x -= (e.clientX - lastMove.x) / camera.scale;
         camera.y -= (e.clientY - lastMove.y) / camera.scale;
@@ -1501,6 +1492,8 @@
   function drawPeerCursor(x, y, color) {
     ctx.save();
     ctx.translate(x, y);
+    ctx.rotate((-20 * Math.PI) / 180);
+    ctx.scale(1.5, 1.5);
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
     ctx.fillStyle = color;
@@ -1625,6 +1618,25 @@
     } catch {}
     return added;
   }
+
+  Object.assign(window, {
+    cvs,
+    grid,
+    strokes,
+    cache,
+    myStack,
+    camera,
+    get DPR() {
+      return DPR;
+    },
+    get meId() {
+      return meId;
+    },
+    serializeState,
+    mergeState,
+    screenToWorld,
+    requestRender,
+  });
 
   // undo/redo
   function undo() {
