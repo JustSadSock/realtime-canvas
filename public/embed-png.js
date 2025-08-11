@@ -163,33 +163,36 @@ document.addEventListener("keydown", keyHandler);
 
 async function finalizePlacement() {
   if (!placement) return;
-  const imgEl = placement.img;
-  let w = imgEl.naturalWidth;
-  let h = imgEl.naturalHeight;
-  let scaleImg = 1;
-  if (w > 2048) {
-    scaleImg = 2048 / w;
-    w = 2048;
-    h = Math.round(h * scaleImg);
+  try {
+    const imgEl = placement.img;
+    let w = imgEl.naturalWidth;
+    let h = imgEl.naturalHeight;
+    let scaleImg = 1;
+    if (w > 2048) {
+      scaleImg = 2048 / w;
+      w = 2048;
+      h = Math.round(h * scaleImg);
+    }
+    const off = document.createElement("canvas");
+    off.width = w;
+    off.height = h;
+    off.getContext("2d").drawImage(imgEl, 0, 0, w, h);
+    const toWorld = (x, y) => {
+      const sx = placement.x + (x * placement.scale) / scaleImg;
+      const sy = placement.y + (y * placement.scale) / scaleImg;
+      return window.screenToWorld(sx, sy);
+    };
+    const sizeScale = placement.scale / window.camera.scale / scaleImg;
+    const strokes = vectorizeImageToStrokes(off, toWorld, sizeScale);
+    const added = window.mergeState({ strokes }, { setBg: false });
+    for (const id of added) {
+      window.myStack.push(id);
+      const s = window.strokes.get(id);
+      window.Net.sendReliable({ type: "add", stroke: { ...s } });
+    }
+  } finally {
+    cleanupPlacement();
   }
-  const off = document.createElement("canvas");
-  off.width = w;
-  off.height = h;
-  off.getContext("2d").drawImage(imgEl, 0, 0, w, h);
-  const toWorld = (x, y) => {
-    const sx = placement.x + (x * placement.scale) / scaleImg;
-    const sy = placement.y + (y * placement.scale) / scaleImg;
-    return window.screenToWorld(sx, sy);
-  };
-  const sizeScale = placement.scale / window.camera.scale / scaleImg;
-  const strokes = vectorizeImageToStrokes(off, toWorld, sizeScale);
-  const added = window.mergeState({ strokes }, { setBg: false });
-  for (const id of added) {
-    window.myStack.push(id);
-    const s = window.strokes.get(id);
-    window.Net.sendReliable({ type: "add", stroke: { ...s } });
-  }
-  cleanupPlacement();
 }
 
 async function startPlacement(imgBlob) {
@@ -217,7 +220,11 @@ async function startPlacement(imgBlob) {
   const panel = document.createElement("div");
   panel.style.position = "absolute";
   panel.style.left = "50%";
-  panel.style.top = "10px";
+  const toolbar = document.getElementById("toolbar");
+  const toolbarBottom = toolbar
+    ? toolbar.getBoundingClientRect().bottom
+    : 0;
+  panel.style.top = toolbarBottom + 10 + "px";
   panel.style.transform = "translateX(-50%)";
   panel.style.background = "rgba(255,255,255,0.8)";
   panel.style.border = "1px solid #ccc";
@@ -260,6 +267,7 @@ async function startPlacement(imgBlob) {
   overlay.addEventListener(
     "wheel",
     (e) => {
+      if (!placement) return;
       e.preventDefault();
       const ds = Math.exp(-e.deltaY / 500);
       const cx = e.clientX;
@@ -284,19 +292,23 @@ async function startPlacement(imgBlob) {
 export async function importPNG(fileOrBlob) {
   const buf = new Uint8Array(await fileOrBlob.arrayBuffer());
   const chunks = extract(buf);
-  const itxt = chunks.find((c) => c.name === "iTXt");
-  if (itxt) {
-    const meta = parseITXt(itxt.data);
-    if (meta.keyword === "rtcanvas") {
-      const json = new TextDecoder().decode(meta.textUint8);
-      const state = JSON.parse(json);
-      const added = window.mergeState(state, { setBg: false });
-      for (const id of added) {
-        window.myStack.push(id);
-        const s = window.strokes.get(id);
-        window.Net.sendReliable({ type: "add", stroke: { ...s } });
+  const itxtChunks = chunks.filter((c) => c.name === "iTXt");
+  for (const chunk of itxtChunks) {
+    try {
+      const meta = parseITXt(chunk.data);
+      if (meta.keyword === "rtcanvas") {
+        const json = new TextDecoder().decode(meta.textUint8);
+        const state = JSON.parse(json);
+        const added = window.mergeState(state, { setBg: false });
+        for (const id of added) {
+          window.myStack.push(id);
+          const s = window.strokes.get(id);
+          window.Net.sendReliable({ type: "add", stroke: { ...s } });
+        }
+        return;
       }
-      return;
+    } catch {
+      // ignore chunks that fail to parse
     }
   }
   await startPlacement(fileOrBlob);

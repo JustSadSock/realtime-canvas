@@ -122,17 +122,19 @@
   }
   #toolbar {
     position: fixed;
-    left: 8px;
-    top: 8px;
+    left: 0;
+    right: 0;
+    top: 0;
     display: none;
     gap: 8px;
     background: var(--panel);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 0 0 12px 12px;
     padding: 8px;
     backdrop-filter: blur(6px);
     align-items: center;
     box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+    justify-content: space-between;
   }
   #toolbar .group {
     display: flex;
@@ -176,8 +178,12 @@
     left: 50%;
     top: auto;
     bottom: 8px;
+    right: auto;
     transform: translateX(-50%);
     flex-wrap: wrap;
+    border-radius: 12px;
+    width: auto;
+    justify-content: center;
   }
   #toolbar.mobile .group {
     flex-wrap: wrap;
