@@ -61,7 +61,6 @@
         <button id="tool-select" class="tool" title="Выделение">🔲</button>
         <button id="tool-fill" class="tool" title="Заливка">🪣</button>
         <button id="tool-pipette" class="tool" title="Пипетка">🧪</button>
-        <button id="tool-image" title="Вставить PNG">🖼️</button>
       </div>
     </div>
   </div>
@@ -91,11 +90,17 @@
     <button id="undo" title="Отменить">↶</button>
     <button id="redo" title="Повторить">↷</button>
     <button id="export" title="Сохранить PNG">🖼️ PNG</button>
+    <button id="import" title="Импорт PNG">📥 Import</button>
     <button id="settingsBtn" title="Настройки">⚙️</button>
   </div>
 </div>
 
-<input id="imageLoader" type="file" accept="image/png" style="display:none" />
+<input id="importFile" type="file" accept="image/png" style="display:none" />
+
+<div id="placementUI" style="display:none;position:fixed;top:8px;left:50%;transform:translateX(-50%);z-index:200;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:6px;gap:8px;display:flex;">
+  <button id="placeOk">Place</button>
+  <button id="placeCancel">Cancel</button>
+</div>
 
 <div class="hint" id="hint">1-5: инструменты • 6-9: размер кисти • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание</div>
 
@@ -117,7 +122,8 @@
 </div>
 
 <script src="net-webrtc.js"></script>
-<script>
+<script type="module">
+import { encodeWithITXt, extractITXt, vectorizeImageToStrokes } from './embed-png.js';
 // ===== util =====
 const $ = s=>document.querySelector(s);
 const $$ = s=>Array.from(document.querySelectorAll(s));
@@ -163,6 +169,7 @@ let selection=null, selOp=null, selectionPreview=null;
 let cursorColor='#007aff';
 const defaultHotkeys={draw:'1',erase:'2',select:'3',pan:'4',fill:'5',size2:'6',size6:'7',size12:'8',size24:'9'};
 let hotkeys={...defaultHotkeys};
+let placement=null, placingDrag=null;
 function loadSettings(){ try{ const s=JSON.parse(localStorage.getItem('settings')); if(s){ if(s.hotkeys) Object.assign(hotkeys,s.hotkeys); if(s.cursorColor) cursorColor=s.cursorColor; } }catch{} }
 function saveSettings(){ try{ localStorage.setItem('settings',JSON.stringify({hotkeys,cursorColor})); }catch{} }
 loadSettings();
@@ -196,8 +203,6 @@ $('#tool-more').onclick = e=>{ e.stopPropagation(); moreGroup.classList.toggle('
 document.addEventListener('click', e=>{ if(!moreGroup.contains(e.target)) moreGroup.classList.remove('open'); });
 $('#more-menu').onclick = ()=> moreGroup.classList.remove('open');
 
-const imageLoader = $('#imageLoader');
-$('#tool-image').onclick = ()=> imageLoader.click();
 
 const sizeButtons = $$('.sz');
 function setSize(v){ brush.size=v; $('#size').value=v; sizeButtons.forEach(b=>b.classList.toggle('active', +b.dataset.v===v)); }
@@ -215,33 +220,26 @@ $('#bg').oninput = e=> { bgColor=e.target.value; requestRender(); debounceSave()
 $('#gridColor').oninput = e=> { gridColor=e.target.value; drawGrid(); };
 $('#undo').onclick = undo; $('#redo').onclick = redo;
 $('#export').onclick = exportPNG;
+const importFile = $('#importFile');
+$('#import').onclick = ()=> importFile.click();
+importFile.onchange = e=>{ const file=e.target.files[0]; if(file) importPNG(file); e.target.value=''; };
+$('#placeOk').onclick = ()=> confirmPlacement();
+$('#placeCancel').onclick = ()=> cancelPlacement();
 $('#settingsBtn').onclick = ()=>{ $('#settings').style.display='block'; $$('.hk').forEach(inp=> inp.value=hotkeys[inp.dataset.action]||''); $('#cursorColorInput').value=cursorColor; };
 $('#settingsClose').onclick = ()=>{ $('#settings').style.display='none'; saveSettings(); renderHint(); };
 $$('.hk').forEach(inp=>{ inp.oninput=()=>{ hotkeys[inp.dataset.action]=inp.value; saveSettings(); renderHint(); }; });
 $('#cursorColorInput').oninput = e=>{ cursorColor=e.target.value; updateSelPattern(); saveSettings(); requestRender(); };
-imageLoader.onchange = e=>{
-  const file=e.target.files[0];
-  if(!file) return;
-  const reader=new FileReader();
-  reader.onload=ev=>{
-    const img=new Image();
-    img.onload=()=>{
-      const pos=screenToWorld(innerWidth/2,innerHeight/2);
-      const id=genId();
-      const s={id,by:meId,mode:'image',x:pos.x,y:pos.y,w:img.width,h:img.height,data:ev.target.result};
-      loadImageForStroke(s);
-      strokes.set(id,s); cache.set(id,s); myStack.push(id); redoStack.length=0;
-      const payload={...s};
-      Net.sendReliable({type:'add',stroke:payload});
-      requestRender(); debounceSave();
-    };
-    img.src=ev.target.result;
-  };
-  reader.readAsDataURL(file);
-  e.target.value='';
-};
+
+stage.addEventListener('dragover', e=>{ e.preventDefault(); });
+stage.addEventListener('drop', e=>{ e.preventDefault(); const file=[...e.dataTransfer.files].find(f=>f.type==='image/png'); if(file) importPNG(file); });
+document.addEventListener('paste', e=>{ const item=[...e.clipboardData.items].find(i=> i.type==='image/png'); if(item){ const file=item.getAsFile(); if(file) importPNG(file); } });
 
 document.addEventListener('keydown',e=>{
+  if(placement){
+    if(e.key==='Escape') cancelPlacement();
+    else if(e.key==='Enter') confirmPlacement();
+    return;
+  }
   if(e.target.tagName==='INPUT') return;
   const k=e.key;
   if(k===hotkeys.draw) setTool('draw');
@@ -332,6 +330,7 @@ function getTouchState(){
 
 cvs.addEventListener('pointerdown', (e)=>{
   cvs.setPointerCapture(e.pointerId);
+  if(placement){ placingDrag={x:e.clientX,y:e.clientY}; return; }
   if(e.pointerType==='touch'){
     touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(touches.size===2){
@@ -374,6 +373,10 @@ cvs.addEventListener('pointerdown', (e)=>{
 });
 
 cvs.addEventListener('pointermove', (e)=>{
+  if(placement){
+    if(placingDrag){ placement.x += (e.clientX-placingDrag.x)/camera.scale; placement.y += (e.clientY-placingDrag.y)/camera.scale; placingDrag={x:e.clientX,y:e.clientY}; requestRender(); }
+    return;
+  }
   if(e.pointerType==='touch' && touches.has(e.pointerId)){
     touches.set(e.pointerId,{x:e.clientX,y:e.clientY});
     if(touches.size===2 && pinchStart){
@@ -437,6 +440,7 @@ cvs.addEventListener('pointermove', (e)=>{
 });
 
 cvs.addEventListener('pointerup', (e)=>{
+  if(placement){ placingDrag=null; return; }
   if(e.pointerType==='touch'){
     touches.delete(e.pointerId);
     if(pinchStart){
@@ -459,10 +463,22 @@ cvs.addEventListener('pointerup', (e)=>{
   current=null;
 });
 
-cvs.addEventListener('pointercancel', e=>{ touches.delete(e.pointerId); pinchStart=null; });
+cvs.addEventListener('pointercancel', e=>{ touches.delete(e.pointerId); pinchStart=null; placingDrag=null; });
 
 // зум/пан колесом
 cvs.addEventListener('wheel', (e)=>{
+  if(placement){
+    e.preventDefault();
+    const pt=screenToWorld(e.clientX,e.clientY);
+    const imgX=(pt.x-placement.x)/placement.scale;
+    const imgY=(pt.y-placement.y)/placement.scale;
+    const k=Math.pow(1.0015,-e.deltaY);
+    placement.scale=clamp(placement.scale*k,0.01,100);
+    placement.x=pt.x-imgX*placement.scale;
+    placement.y=pt.y-imgY*placement.scale;
+    requestRender();
+    return;
+  }
   e.preventDefault();
   const mouse = { clientX:e.clientX, clientY:e.clientY };
   if (e.shiftKey){ camera.x -= e.deltaX / camera.scale; camera.y -= e.deltaY / camera.scale; drawGrid(); requestRender(); return; }
@@ -475,6 +491,7 @@ cvs.addEventListener('wheel', (e)=>{
 },{passive:false});
 
 addEventListener('keydown', e=>{
+  if(placement) return;
   if(e.key==='Delete' && selection){
     for(const id of selection.ids){ strokes.delete(id); Net.sendReliable({type:'del',id}); }
     selection=null; requestRender(); debounceSave();
@@ -560,6 +577,7 @@ function draw(){
     ctx.strokeStyle=s.color; ctx.lineWidth=s.size*camera.scale;
     ctx.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-camera.x)*camera.scale, y=(p.y-camera.y)*camera.scale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke(); ctx.restore();
   }
+  if(placement){ ctx.save(); ctx.globalAlpha=0.6; ctx.drawImage(placement.img,(placement.x-camera.x)*camera.scale,(placement.y-camera.y)*camera.scale,placement.img.width*placement.scale*camera.scale,placement.img.height*placement.scale*camera.scale); ctx.restore(); }
   if(selection) drawSel(selection.path, selection.rect, true);
   if(selectionPreview) drawSel(selectionPreview, bboxOfPoints(selectionPreview), false);
   if(selection || selectionPreview) requestRender();
@@ -604,12 +622,54 @@ function handleMsg(op){
 function serializeState(){ return { bg: bgColor, strokes: Array.from(strokes.values()) }; }
 function mergeState(state){
   try{
-    if (state.bg) bgColor = state.bg;
     if (Array.isArray(state.strokes)){
-      for(const s of state.strokes){ if(!strokes.has(s.id)){ if(s.mode==='image') loadImageForStroke(s); strokes.set(s.id, s); cache.set(s.id, s); } }
+      for(const s of state.strokes){
+        const ex = strokes.get(s.id);
+        if(!ex || ((s.points?.length||0) > (ex.points?.length||0))){
+          if(s.mode==='image') loadImageForStroke(s);
+          strokes.set(s.id,s);
+          cache.set(s.id,s);
+        }
+      }
     }
     requestRender(); debounceSave();
   }catch{}
+}
+
+async function importPNG(fileOrBlob){
+  const buf = new Uint8Array(await fileOrBlob.arrayBuffer());
+  const txt = extractITXt(buf, 'rtcanvas');
+  if(txt){
+    try{ const state = JSON.parse(txt); mergeState(state); }catch{}
+    return;
+  }
+  const img = new Image();
+  img.onload=()=> startPlacement(img);
+  img.src = URL.createObjectURL(fileOrBlob);
+}
+
+function startPlacement(img){
+  const pos=screenToWorld(innerWidth/2, innerHeight/2);
+  placement={img, x:pos.x-img.width/2, y:pos.y-img.height/2, scale:1};
+  $('#placementUI').style.display='flex';
+  requestRender();
+}
+
+function cancelPlacement(){ placement=null; placingDrag=null; $('#placementUI').style.display='none'; requestRender(); }
+
+function confirmPlacement(){
+  if(!placement) return;
+  $('#placementUI').style.display='none';
+  const img=placement.img;
+  const max=2048;
+  const sc=Math.min(1, max/img.width);
+  const off=document.createElement('canvas'); off.width=Math.floor(img.width*sc); off.height=Math.floor(img.height*sc);
+  off.getContext('2d').drawImage(img,0,0,off.width,off.height);
+  const toWorld=(x,y)=>({ x: placement.x + (x/sc)*placement.scale, y: placement.y + (y/sc)*placement.scale });
+  const vecs = vectorizeImageToStrokes(off, toWorld, meId, placement.scale);
+  for(const s of vecs){ strokes.set(s.id,s); cache.set(s.id,s); myStack.push(s.id); enqueue({type:'add', stroke:{...s}}); }
+  redoStack.length=0;
+  placement=null; placingDrag=null; requestRender(); debounceSave();
 }
 
 // undo/redo
@@ -617,13 +677,13 @@ function undo(){ const id = myStack.pop(); if(!id) return; Net.sendReliable({typ
 function redo(){ const id = redoStack.pop(); if(!id) return; const s = cache.get(id); if(!s) return; strokes.set(id, s); const payload={...s}; Net.sendReliable({type:'add', stroke:payload}); myStack.push(id); requestRender(); debounceSave(); }
 
 // PNG экспорт
-function exportPNG(){
+async function exportPNG(){
   if (strokes.size===0){ alert('Нечего сохранять'); return; }
   const bb = bboxOfStrokes(); if(!bb){ alert('Нечего сохранять'); return; }
   const MAX=8192; const width=Math.ceil(bb.maxX-bb.minX), height=Math.ceil(bb.maxY-bb.minY);
   const scale=Math.min(MAX/width, MAX/height, 1);
   const off=document.createElement('canvas'); off.width=Math.max(1,Math.floor(width*scale)); off.height=Math.max(1,Math.floor(height*scale));
-  const ox=off.getContext('2d'); ox.fillStyle=bgColor; ox.fillRect(0,0,off.width,off.height);
+  const ox=off.getContext('2d');
   for(const s of strokes.values()){
     if(s.mode==='image'){
       if(s._img) ox.drawImage(s._img,(s.x-bb.minX)*scale,(s.y-bb.minY)*scale,s.w*scale,s.h*scale);
@@ -633,7 +693,11 @@ function exportPNG(){
     ox.strokeStyle=s.color; ox.lineJoin='round'; ox.lineCap='round'; ox.lineWidth=s.size*scale;
     ox.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-bb.minX)*scale, y=(p.y-bb.minY)*scale; if(i===0) ox.moveTo(x,y); else ox.lineTo(x,y); }); ox.stroke(); ox.restore();
   }
-  off.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='canvas.png'; a.click(); }, 'image/png');
+  const baseBlob = await new Promise(res=> off.toBlob(res, 'image/png'));
+  const buf = new Uint8Array(await baseBlob.arrayBuffer());
+  const out = encodeWithITXt(buf, 'rtcanvas', JSON.stringify(serializeState()));
+  const result = new Blob([out], { type:'image/png' });
+  const a=document.createElement('a'); a.href=URL.createObjectURL(result); a.download='canvas.png'; a.click();
 }
 function bboxOfStrokes(){ let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity, any=false; for(const s of strokes.values()){ const b=bboxOfStroke(s); if(b){ any=true; if(b.x<minX)minX=b.x; if(b.y<minY)minY=b.y; if(b.x+b.w>maxX)maxX=b.x+b.w; if(b.y+b.h>maxY)maxY=b.y+b.h; } } return any?{minX,minY,maxX,maxY}:null; }
 
