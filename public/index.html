@@ -466,6 +466,7 @@
   const cache = new Map(); // полный штрих (для redo/ресинка)
   const myStack = []; // ids моих штрихов (для undo)
   const redoStack = []; // ids для redo
+  const deleted = new Set(); // ids удалённых штрихов
 
   const patternCanvas = document.createElement("canvas");
   patternCanvas.width = 8;
@@ -779,6 +780,7 @@
         pinchStart = { camera: { ...camera }, ...getTouchState() };
         if (current) {
           strokes.delete(current.id);
+          deleted.add(current.id);
           cache.delete(current.id);
           myStack.pop();
           enqueue({ type: "del", id: current.id });
@@ -1076,6 +1078,7 @@
     if (e.key === "Delete" && selection) {
       for (const id of selection.ids) {
         strokes.delete(id);
+        deleted.add(id);
         Net.sendReliable({ type: "del", id });
       }
       selection = null;
@@ -1549,6 +1552,7 @@
         cache.set(op.id, s);
       }
       for (const p of op.points) s.points.push(p);
+      deleted.delete(op.id);
       requestRender();
       debounceSave();
       return;
@@ -1568,12 +1572,14 @@
       };
       strokes.set(op.id, s);
       cache.set(op.id, s);
+      deleted.delete(op.id);
       requestRender();
       debounceSave();
       return;
     }
     if (op.type === "del") {
       strokes.delete(op.id);
+      deleted.add(op.id);
       requestRender();
       debounceSave();
       return;
@@ -1583,6 +1589,7 @@
       if (s.mode === "image") loadImageForStroke(s);
       strokes.set(s.id, s);
       cache.set(s.id, s);
+      deleted.delete(s.id);
       requestRender();
       debounceSave();
       return;
@@ -1610,15 +1617,35 @@
 
   function serializeState() {
     // ВАЖНО: не инкрементим здесь — просто возвращаем текущее
-    return { bg: bgColor, strokes: Array.from(strokes.values()), rev };
+    return {
+      bg: bgColor,
+      strokes: Array.from(strokes.values()),
+      deleted: Array.from(deleted),
+      rev,
+    };
   }
   function mergeState(state, opt = {}) {
     try {
       let changed = false;
       const oldRev = rev | 0;
+      const srvRev = state && typeof state.rev === "number" ? state.rev | 0 : 0;
       if (state && typeof state.bg === "string") bgColor = state.bg;
+
+      if (srvRev > oldRev) {
+        deleted.clear();
+        if (state && Array.isArray(state.deleted)) {
+          for (const id of state.deleted) deleted.add(id);
+        }
+      } else if (state && Array.isArray(state.deleted)) {
+        for (const id of state.deleted) deleted.add(id);
+      }
+
       if (state && Array.isArray(state.strokes)) {
         for (const s of state.strokes) {
+          if (deleted.has(s.id)) {
+            if (strokes.delete(s.id)) changed = true;
+            continue;
+          }
           const had = strokes.get(s.id);
           if (!had) {
             if (s.mode === "image") loadImageForStroke(s);
@@ -1633,8 +1660,6 @@
           }
         }
       }
-      // поднять локальную ревизию до серверной/чужой
-      const srvRev = state && typeof state.rev === "number" ? (state.rev | 0) : 0;
       if (srvRev > rev) rev = srvRev;
       requestRender();
       // ВАЖНО:
@@ -1650,6 +1675,7 @@
     strokes,
     cache,
     myStack,
+    deleted,
     camera,
     get DPR() {
       return DPR;
@@ -1669,6 +1695,7 @@
     if (!id) return;
     Net.sendReliable({ type: "del", id });
     strokes.delete(id);
+    deleted.add(id);
     redoStack.push(id);
     requestRender();
     debounceSave();
@@ -1682,6 +1709,7 @@
     const payload = { ...s };
     Net.sendReliable({ type: "add", stroke: payload });
     myStack.push(id);
+    deleted.delete(id);
     requestRender();
     debounceSave();
   }
