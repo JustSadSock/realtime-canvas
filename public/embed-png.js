@@ -1,13 +1,13 @@
-import extract from 'https://esm.sh/png-chunks-extract';
-import encode from 'https://esm.sh/png-chunks-encode';
-import { deflate, inflate } from 'https://esm.sh/pako@2.1.0';
+import extract from "https://esm.sh/png-chunks-extract";
+import encode from "https://esm.sh/png-chunks-encode";
+import { deflate, inflate } from "https://esm.sh/pako@2.1.0";
 
 function makeITXt(keyword, textUint8, compressed = true) {
   const k = new TextEncoder().encode(keyword);
   const z = compressed ? deflate(textUint8) : textUint8;
   const arr = [];
   arr.push(...k, 0, compressed ? 1 : 0, 0, 0, 0, ...z);
-  return { name: 'iTXt', data: new Uint8Array(arr) };
+  return { name: "iTXt", data: new Uint8Array(arr) };
 }
 
 function parseITXt(data) {
@@ -28,28 +28,28 @@ function parseITXt(data) {
 async function renderPNGTransparentBlob() {
   const cvs = window.cvs;
   const DPR = window.DPR || 1;
-  const off = document.createElement('canvas');
+  const off = document.createElement("canvas");
   off.width = cvs.width;
   off.height = cvs.height;
-  const ox = off.getContext('2d');
+  const ox = off.getContext("2d");
   ox.setTransform(DPR, 0, 0, DPR, 0, 0);
   for (const s of window.strokes.values()) {
-    if (s.mode === 'image') {
+    if (s.mode === "image") {
       if (s._img)
         ox.drawImage(
           s._img,
           (s.x - window.camera.x) * window.camera.scale,
           (s.y - window.camera.y) * window.camera.scale,
           s.w * window.camera.scale,
-          s.h * window.camera.scale
+          s.h * window.camera.scale,
         );
       continue;
     }
     ox.save();
-    ox.lineJoin = 'round';
-    ox.lineCap = 'round';
+    ox.lineJoin = "round";
+    ox.lineCap = "round";
     ox.globalCompositeOperation =
-      s.mode === 'erase' ? 'destination-out' : 'source-over';
+      s.mode === "erase" ? "destination-out" : "source-over";
     ox.strokeStyle = s.color;
     ox.lineWidth = s.size * window.camera.scale;
     ox.beginPath();
@@ -62,27 +62,23 @@ async function renderPNGTransparentBlob() {
     ox.stroke();
     ox.restore();
   }
-  return await new Promise((res) => off.toBlob(res, 'image/png'));
+  return await new Promise((res) => off.toBlob(res, "image/png"));
 }
 
-async function exportEmbeddedPNG() {
+export async function exportEmbeddedPNG() {
   const blob = await renderPNGTransparentBlob();
   const pngBuf = new Uint8Array(await blob.arrayBuffer());
   const chunks = extract(pngBuf);
   const state = window.serializeState();
   const json = new TextEncoder().encode(JSON.stringify(state));
-  const itxt = makeITXt('rtcanvas', json, true);
-  const out = encode([
-    ...chunks.slice(0, -1),
-    itxt,
-    chunks[chunks.length - 1],
-  ]);
-  return new Blob([out], { type: 'image/png' });
+  const itxt = makeITXt("rtcanvas", json, true);
+  const out = encode([...chunks.slice(0, -1), itxt, chunks[chunks.length - 1]]);
+  return new Blob([out], { type: "image/png" });
 }
 
 function vectorizeImageToStrokes(imgCanvas, toWorld, sizeScale) {
   const { width, height } = imgCanvas;
-  const ix = imgCanvas.getContext('2d').getImageData(0, 0, width, height);
+  const ix = imgCanvas.getContext("2d").getImageData(0, 0, width, height);
   const data = ix.data;
   const quant = (v) => ((v / 16) | 0) * 16;
   const out = [];
@@ -120,7 +116,7 @@ function vectorizeImageToStrokes(imgCanvas, toWorld, sizeScale) {
           out.push({
             id: `imp-${Date.now()}-${idn++}`,
             by: window.meId,
-            mode: 'draw',
+            mode: "draw",
             color: `rgb(${r},${g},${b})`,
             size: sizeScale,
             points: [p0, p1],
@@ -151,19 +147,19 @@ function cleanupPlacement() {
   overlay = null;
   placement = null;
   window.requestRender();
-  document.removeEventListener('keydown', keyHandler);
+  document.removeEventListener("keydown", keyHandler);
 }
 
 function keyHandler(e) {
   if (!placement) return;
-  if (e.key === 'Escape') {
+  if (e.key === "Escape") {
     cleanupPlacement();
-  } else if (e.key === 'Enter') {
+  } else if (e.key === "Enter") {
     finalizePlacement();
   }
 }
 
-document.addEventListener('keydown', keyHandler);
+document.addEventListener("keydown", keyHandler);
 
 async function finalizePlacement() {
   if (!placement) return;
@@ -176,22 +172,22 @@ async function finalizePlacement() {
     w = 2048;
     h = Math.round(h * scaleImg);
   }
-  const off = document.createElement('canvas');
+  const off = document.createElement("canvas");
   off.width = w;
   off.height = h;
-  off.getContext('2d').drawImage(imgEl, 0, 0, w, h);
+  off.getContext("2d").drawImage(imgEl, 0, 0, w, h);
   const toWorld = (x, y) => {
     const sx = placement.x + (x * placement.scale) / scaleImg;
     const sy = placement.y + (y * placement.scale) / scaleImg;
     return window.screenToWorld(sx, sy);
   };
-  const sizeScale = (placement.scale / window.camera.scale) / scaleImg;
+  const sizeScale = placement.scale / window.camera.scale / scaleImg;
   const strokes = vectorizeImageToStrokes(off, toWorld, sizeScale);
   const added = window.mergeState({ strokes }, { setBg: false });
   for (const id of added) {
     window.myStack.push(id);
     const s = window.strokes.get(id);
-    window.Net.sendReliable({ type: 'add', stroke: { ...s } });
+    window.Net.sendReliable({ type: "add", stroke: { ...s } });
   }
   cleanupPlacement();
 }
@@ -209,30 +205,30 @@ async function startPlacement(imgBlob) {
     y: (innerHeight - img.height) / 2,
     scale: 1,
   };
-  overlay = document.createElement('div');
-  overlay.style.position = 'fixed';
-  overlay.style.left = '0';
-  overlay.style.top = '0';
-  overlay.style.right = '0';
-  overlay.style.bottom = '0';
-  overlay.style.zIndex = '100';
-  overlay.style.cursor = 'move';
+  overlay = document.createElement("div");
+  overlay.style.position = "fixed";
+  overlay.style.left = "0";
+  overlay.style.top = "0";
+  overlay.style.right = "0";
+  overlay.style.bottom = "0";
+  overlay.style.zIndex = "100";
+  overlay.style.cursor = "move";
   overlay.appendChild(img);
-  const panel = document.createElement('div');
-  panel.style.position = 'absolute';
-  panel.style.left = '50%';
-  panel.style.top = '10px';
-  panel.style.transform = 'translateX(-50%)';
-  panel.style.background = 'rgba(255,255,255,0.8)';
-  panel.style.border = '1px solid #ccc';
-  panel.style.borderRadius = '8px';
-  panel.style.padding = '6px';
-  panel.style.display = 'flex';
-  panel.style.gap = '8px';
-  const placeBtn = document.createElement('button');
-  placeBtn.textContent = 'Place';
-  const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = 'Cancel';
+  const panel = document.createElement("div");
+  panel.style.position = "absolute";
+  panel.style.left = "50%";
+  panel.style.top = "10px";
+  panel.style.transform = "translateX(-50%)";
+  panel.style.background = "rgba(255,255,255,0.8)";
+  panel.style.border = "1px solid #ccc";
+  panel.style.borderRadius = "8px";
+  panel.style.padding = "6px";
+  panel.style.display = "flex";
+  panel.style.gap = "8px";
+  const placeBtn = document.createElement("button");
+  placeBtn.textContent = "Place";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.textContent = "Cancel";
   panel.appendChild(placeBtn);
   panel.appendChild(cancelBtn);
   overlay.appendChild(panel);
@@ -241,12 +237,12 @@ async function startPlacement(imgBlob) {
   let dragging = false;
   let lx = 0;
   let ly = 0;
-  overlay.addEventListener('pointerdown', (e) => {
+  overlay.addEventListener("pointerdown", (e) => {
     dragging = true;
     lx = e.clientX;
     ly = e.clientY;
   });
-  overlay.addEventListener('pointermove', (e) => {
+  overlay.addEventListener("pointermove", (e) => {
     if (!dragging) return;
     placement.x += e.clientX - lx;
     placement.y += e.clientY - ly;
@@ -254,14 +250,14 @@ async function startPlacement(imgBlob) {
     ly = e.clientY;
     updatePlacement();
   });
-  overlay.addEventListener('pointerup', () => {
+  overlay.addEventListener("pointerup", () => {
     dragging = false;
   });
-  overlay.addEventListener('pointerleave', () => {
+  overlay.addEventListener("pointerleave", () => {
     dragging = false;
   });
   overlay.addEventListener(
-    'wheel',
+    "wheel",
     (e) => {
       e.preventDefault();
       const ds = Math.exp(-e.deltaY / 500);
@@ -272,26 +268,26 @@ async function startPlacement(imgBlob) {
       placement.y = cy - (cy - placement.y) * ds;
       updatePlacement();
     },
-    { passive: false }
+    { passive: false },
   );
   placeBtn.onclick = finalizePlacement;
   cancelBtn.onclick = cleanupPlacement;
 }
 
-async function importPNG(fileOrBlob) {
+export async function importPNG(fileOrBlob) {
   const buf = new Uint8Array(await fileOrBlob.arrayBuffer());
   const chunks = extract(buf);
-  const itxt = chunks.find((c) => c.name === 'iTXt');
+  const itxt = chunks.find((c) => c.name === "iTXt");
   if (itxt) {
     const meta = parseITXt(itxt.data);
-    if (meta.keyword === 'rtcanvas') {
+    if (meta.keyword === "rtcanvas") {
       const json = new TextDecoder().decode(meta.textUint8);
       const state = JSON.parse(json);
       const added = window.mergeState(state, { setBg: false });
       for (const id of added) {
         window.myStack.push(id);
         const s = window.strokes.get(id);
-        window.Net.sendReliable({ type: 'add', stroke: { ...s } });
+        window.Net.sendReliable({ type: "add", stroke: { ...s } });
       }
       return;
     }
@@ -299,5 +295,14 @@ async function importPNG(fileOrBlob) {
   await startPlacement(fileOrBlob);
 }
 
-window.exportEmbeddedPNG = exportEmbeddedPNG;
-window.importPNG = importPNG;
+export function hasEmbeddedState(pngUint8) {
+  const chunks = extract(pngUint8);
+  const itxt = chunks.find((c) => c.name === "iTXt");
+  if (!itxt) return false;
+  try {
+    const meta = parseITXt(itxt.data);
+    return meta.keyword === "rtcanvas";
+  } catch {
+    return false;
+  }
+}
