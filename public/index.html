@@ -7,10 +7,11 @@
     --bg:#fff9fb; --fg:#222; --border:#e0cfe4; --panel:#ffffffcc; --muted:#888; --accent:#ff99cc;
   }
   html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial}
-  .wrap{max-width:800px;margin:20px auto;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fff}
+  .wrap{max-width:800px;margin:20px auto;padding:16px;border:1px solid var(--border);border-radius:12px;background:#fff;box-shadow:0 4px 10px rgba(0,0,0,.08)}
   input,button,select{background:#fff;color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:16px}
   input[type=range]{padding:0}
-  button{cursor:pointer;transition:background .2s,box-shadow .2s} button:active{transform:translateY(1px)}
+  button{cursor:pointer;transition:background .2s,box-shadow .2s;box-shadow:0 2px 4px rgba(0,0,0,.2);background:linear-gradient(#fff,#e6e6e6)}
+  button:active{transform:translateY(1px);box-shadow:inset 0 2px 4px rgba(0,0,0,.2)}
   button:hover{background:var(--accent);color:#fff}
   button.active,.swatch.active,#color.active,.sz.active{box-shadow:0 0 0 3px var(--accent);}
   .sz.active{background:var(--accent);color:#fff}
@@ -19,11 +20,11 @@
   #stage{position:fixed;inset:0;display:none}
   #grid{position:absolute;inset:0;pointer-events:none}
   #cvs{position:absolute;inset:0;touch-action:none}
-  #toolbar{position:fixed;left:8px;top:8px;display:none;gap:8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px;backdrop-filter:blur(6px);align-items:center}
+  #toolbar{position:fixed;left:8px;top:8px;display:none;gap:8px;background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:8px;backdrop-filter:blur(6px);align-items:center;box-shadow:0 4px 10px rgba(0,0,0,.1)}
   #toolbar .group{display:flex;gap:6px;align-items:center}
-  #toolbar .swatch{width:26px;height:26px;border-radius:6px;border:1px solid var(--border)}
+  #toolbar .swatch{width:26px;height:26px;border-radius:6px;border:1px solid var(--border);box-shadow:0 2px 4px rgba(0,0,0,.1)}
   #toolbar small{color:var(--muted)}
-  .hint{position:fixed;right:8px;bottom:8px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px 8px;font-size:12px}
+  .hint{position:fixed;right:8px;bottom:8px;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:6px 8px;font-size:12px;box-shadow:0 2px 6px rgba(0,0,0,.1)}
 </style>
 
 <div id="lobby" class="wrap">
@@ -46,8 +47,9 @@
   <div class="group">
     <button id="tool-draw" class="tool" title="Кисть">✏️</button>
     <button id="tool-erase" class="tool" title="Ластик">🩹</button>
+    <button id="tool-select" class="tool" title="Выделение">🔲</button>
     <button id="tool-pan" class="tool" title="Перемещение">🖐️</button>
-    <button id="tool-fill" class="tool" title="Заливка фона">🪣</button>
+    <button id="tool-fill" class="tool" title="Заливка">🪣</button>
   </div>
   <div class="group">
     <small>Толщина</small>
@@ -123,6 +125,7 @@ let roomId=null, meId=null;
 let mode='draw';
 let brush = { color:'#000000', size:6 };
 let bgColor = '#ffffff';
+let selection=null, selOp=null, selectionPreview=null;
 
 const strokes = new Map(); // id-> {id,by,mode,color,size,points:[]}
 const cache = new Map();   // полный штрих (для redo/ресинка)
@@ -134,6 +137,7 @@ const toolButtons = $$('.tool');
 function setTool(t){ mode=t; toolButtons.forEach(btn=>btn.classList.toggle('active', btn.id==='tool-'+t)); }
 $('#tool-draw').onclick = ()=> setTool('draw');
 $('#tool-erase').onclick = ()=> setTool('erase');
+$('#tool-select').onclick = ()=> setTool('select');
 $('#tool-pan').onclick = ()=> setTool('pan');
 $('#tool-fill').onclick = ()=> setTool('fill');
 
@@ -226,7 +230,16 @@ cvs.addEventListener('pointerdown', (e)=>{
   if (e.button===1 || mode==='pan'){ lastMove={x:e.clientX,y:e.clientY}; return; }
   const w=toWorld(e);
   if (mode==='fill'){
-    bgColor = brush.color; requestRender(); debounceSave(); return;
+    const id=genId();
+    const s={id,by:meId,mode:'fill',color:brush.color,size:0,points:[w]};
+    strokes.set(id,s); cache.set(id,s); myStack.push(id); redoStack.length=0;
+    enqueue({type:'fill',id,by:meId,color:brush.color,x:w.x,y:w.y});
+    requestRender(); debounceSave(); return;
+  }
+  if (mode==='select'){
+    if(selection){ const r=selection.rect; const hit=pointInRect(w,r); const corner=hitCorner(w,r,10/camera.scale); if(corner){ selOp={type:'resize',corner,start:w,rect:{...r}}; } else if(hit){ selOp={type:'move',start:w,rect:{...r}}; } else { selection=null; selOp={type:'select',start:w}; } }
+    else { selOp={type:'select',start:w}; }
+    selectionPreview=null; return;
   }
   current = { id: genId(), by: meId, mode, color:(mode==='erase'?'#000000':brush.color), size:brush.size, points:[w] };
   strokes.set(current.id, current); cache.set(current.id, current); myStack.push(current.id); redoStack.length=0;
@@ -240,6 +253,25 @@ cvs.addEventListener('pointermove', (e)=>{
     if (lastMove){ camera.x -= (e.clientX-lastMove.x)/camera.scale; camera.y -= (e.clientY-lastMove.y)/camera.scale; drawGrid(); requestRender(); }
     lastMove={x:e.clientX,y:e.clientY}; return;
   }
+  if(mode==='select' && isDown && selOp){
+    if(selOp.type==='select'){ selOp.rect=rectFromPoints(selOp.start,w); selectionPreview=selOp.rect; }
+    if(selOp.type==='move'){
+      const dx=w.x-selOp.start.x, dy=w.y-selOp.start.y;
+      selection.rect={x:selOp.rect.x+dx,y:selOp.rect.y+dy,w:selOp.rect.w,h:selOp.rect.h};
+      for(const id of selection.ids){ const s=strokes.get(id); if(s.mode==='fill'){ s.points[0].x+=dx; s.points[0].y+=dy; } else { for(const p of s.points){ p.x+=dx; p.y+=dy; } } }
+    }
+    if(selOp.type==='resize'){
+      const r=selOp.rect; let x1=r.x, y1=r.y, x2=r.x+r.w, y2=r.y+r.h;
+      if(selOp.corner.includes('l')) x1=w.x;
+      if(selOp.corner.includes('r')) x2=w.x;
+      if(selOp.corner.includes('t')) y1=w.y;
+      if(selOp.corner.includes('b')) y2=w.y;
+      selection.rect={x:Math.min(x1,x2),y:Math.min(y1,y2),w:Math.abs(x2-x1),h:Math.abs(y2-y1)};
+      const sx=selection.rect.w/r.w, sy=selection.rect.h/r.h; const ox=r.x, oy=r.y;
+      for(const id of selection.ids){ const s=strokes.get(id); if(s.mode==='fill'){ const p=s.points[0]; p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy; } else { for(const p of s.points){ p.x=selection.rect.x+(p.x-ox)*sx; p.y=selection.rect.y+(p.y-oy)*sy; } } }
+    }
+    requestRender(); Net.sendCursor({x:w.x,y:w.y,drawing:false}); return;
+  }
   if(isDown && current && (mode==='draw' || mode==='erase')){
     current.points.push(w);
     enqueue({ type:'stroke_pts', id: current.id, by: meId, mode: current.mode, color: current.color, size: current.size, points:[w] });
@@ -248,7 +280,20 @@ cvs.addEventListener('pointermove', (e)=>{
   Net.sendCursor({ x:w.x, y:w.y, drawing:isDown });
 });
 
-cvs.addEventListener('pointerup', ()=>{ isDown=false; lastMove=null; current=null; });
+cvs.addEventListener('pointerup', (e)=>{
+  isDown=false; lastMove=null;
+  if(mode==='select' && selOp){
+    if(selOp.type==='select' && selOp.rect){
+      selection={ids:[],rect:selOp.rect};
+      for(const [id,s] of strokes){ const bb=bboxOfStroke(s); if(rectsIntersect(bb,selection.rect)) selection.ids.push(id); }
+      if(selection.ids.length===0) selection=null;
+    } else if(selOp.type==='move' || selOp.type==='resize'){
+      if(selection) for(const id of selection.ids){ const s=strokes.get(id); Net.sendReliable({type:'del',id}); Net.sendReliable({type:'add',stroke:s}); }
+    }
+    selOp=null; selectionPreview=null; requestRender(); debounceSave(); current=null; return;
+  }
+  current=null;
+});
 
 // зум/пан колесом
 cvs.addEventListener('wheel', (e)=>{
@@ -263,8 +308,57 @@ cvs.addEventListener('wheel', (e)=>{
   drawGrid(); requestRender();
 },{passive:false});
 
+addEventListener('keydown', e=>{
+  if(e.key==='Delete' && selection){
+    for(const id of selection.ids){ strokes.delete(id); Net.sendReliable({type:'del',id}); }
+    selection=null; requestRender(); debounceSave();
+  }
+});
+
 function toWorld(e){ return { x: e.clientX/camera.scale + camera.x, y: e.clientY/camera.scale + camera.y }; }
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+function rectFromPoints(a,b){ return {x:Math.min(a.x,b.x), y:Math.min(a.y,b.y), w:Math.abs(a.x-b.x), h:Math.abs(a.y-b.y)}; }
+function pointInRect(p,r){ return p.x>=r.x && p.y>=r.y && p.x<=r.x+r.w && p.y<=r.y+r.h; }
+function rectsIntersect(a,b){ return !(a.x+a.w<b.x || b.x+b.w<a.x || a.y+a.h<b.y || b.y+b.h<a.y); }
+function hitCorner(p,r,t){
+  const x1=r.x, y1=r.y, x2=r.x+r.w, y2=r.y+r.h;
+  if(Math.abs(p.x-x1)<=t && Math.abs(p.y-y1)<=t) return 'tl';
+  if(Math.abs(p.x-x2)<=t && Math.abs(p.y-y1)<=t) return 'tr';
+  if(Math.abs(p.x-x1)<=t && Math.abs(p.y-y2)<=t) return 'bl';
+  if(Math.abs(p.x-x2)<=t && Math.abs(p.y-y2)<=t) return 'br';
+  return null;
+}
+function bboxOfStroke(s){
+  if(s.mode==='fill'){ const p=s.points[0]; return {x:p.x-1,y:p.y-1,w:2,h:2}; }
+  let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity; for(const p of s.points){ if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; }
+  return {x:minX,y:minY,w:maxX-minX,h:maxY-minY};
+}
+function hexToRgb(hex){ const n=parseInt(hex.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+function applyFillStroke(s){
+  const w=cvs.width, h=cvs.height;
+  const x=Math.round((s.points[0].x-camera.x)*camera.scale*DPR);
+  const y=Math.round((s.points[0].y-camera.y)*camera.scale*DPR);
+  if(x<0||y<0||x>=w||y>=h) return;
+  const img=ctx.getImageData(0,0,w,h);
+  const data=img.data;
+  const idx=(y*w+x)*4;
+  const target=[data[idx],data[idx+1],data[idx+2],data[idx+3]];
+  const fill=hexToRgb(s.color);
+  if(target[0]===fill[0] && target[1]===fill[1] && target[2]===fill[2] && target[3]===255) return;
+  const stack=[[x,y]];
+  const match=i=>data[i]===target[0]&&data[i+1]===target[1]&&data[i+2]===target[2]&&data[i+3]===target[3];
+  while(stack.length){
+    const [cx,cy]=stack.pop();
+    const i=(cy*w+cx)*4;
+    if(!match(i)) continue;
+    data[i]=fill[0]; data[i+1]=fill[1]; data[i+2]=fill[2]; data[i+3]=255;
+    if(cx>0) stack.push([cx-1,cy]);
+    if(cx<w-1) stack.push([cx+1,cy]);
+    if(cy>0) stack.push([cx,cy-1]);
+    if(cy<h-1) stack.push([cx,cy+1]);
+  }
+  ctx.putImageData(img,0,0);
+}
 
 // батчинг сетевых событий
 const buffer=[]; let flushTimer=null;
@@ -280,14 +374,34 @@ function draw(){
   const w=cvs.width/DPR, h=cvs.height/DPR;
   ctx.clearRect(0,0,w,h); ctx.fillStyle=bgColor; ctx.fillRect(0,0,w,h);
   for(const s of strokes.values()){
+    if(s.mode==='fill'){ applyFillStroke(s); continue; }
     ctx.save(); ctx.lineJoin='round'; ctx.lineCap='round';
     ctx.globalCompositeOperation = (s.mode==='erase')?'destination-out':'source-over';
     ctx.strokeStyle=s.color; ctx.lineWidth=s.size*camera.scale;
     ctx.beginPath(); s.points.forEach((p,i)=>{ const x=(p.x-camera.x)*camera.scale, y=(p.y-camera.y)*camera.scale; if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y); }); ctx.stroke(); ctx.restore();
   }
+  if(selection) drawSelRect(selection.rect);
+  if(selectionPreview) drawSelRect(selectionPreview);
   // курсоры
   const now=Date.now();
   for(const [id,c] of cursors){ if(now-c.ts>3000) continue; const x=(c.x-camera.x)*camera.scale, y=(c.y-camera.y)*camera.scale; ctx.beginPath(); ctx.arc(x,y,6,0,Math.PI*2); ctx.fillStyle='#007aff'; ctx.fill(); }
+}
+
+function drawSelRect(r){
+  const x=(r.x-camera.x)*camera.scale;
+  const y=(r.y-camera.y)*camera.scale;
+  const w=r.w*camera.scale;
+  const h=r.h*camera.scale;
+  ctx.save();
+  ctx.strokeStyle='#007aff';
+  ctx.setLineDash([8,4]);
+  ctx.strokeRect(x,y,w,h);
+  ctx.setLineDash([]);
+  const hs=6;
+  const corners=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]];
+  ctx.fillStyle='#fff'; ctx.strokeStyle='#007aff';
+  for(const [cx,cy] of corners){ ctx.beginPath(); ctx.rect(cx-hs/2,cy-hs/2,hs,hs); ctx.fill(); ctx.stroke(); }
+  ctx.restore();
 }
 
 // сетевые сообщения
@@ -298,6 +412,10 @@ function handleMsg(op){
     if(!s){ s = { id:op.id, by:op.by, mode:op.mode, color:op.color, size:op.size, points:[] }; strokes.set(op.id, s); cache.set(op.id, s); }
     for(const p of op.points) s.points.push(p);
     requestRender(); debounceSave(); return;
+  }
+  if(op.type==='fill'){
+    const s={id:op.id,by:op.by,mode:'fill',color:op.color,size:0,points:[{x:op.x,y:op.y}]};
+    strokes.set(op.id,s); cache.set(op.id,s); requestRender(); debounceSave(); return;
   }
   if(op.type==='del'){ strokes.delete(op.id); requestRender(); debounceSave(); return; }
   if(op.type==='add'){ const s = op.stroke; strokes.set(s.id, s); cache.set(s.id, s); requestRender(); debounceSave(); return; }
@@ -337,7 +455,7 @@ function exportPNG(){
   }
   off.toBlob(b=>{ const a=document.createElement('a'); a.href=URL.createObjectURL(b); a.download='canvas.png'; a.click(); }, 'image/png');
 }
-function bboxOfStrokes(){ let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity, any=false; for(const s of strokes.values()){ for(const p of s.points){ any=true; if(p.x<minX)minX=p.x; if(p.y<minY)minY=p.y; if(p.x>maxX)maxX=p.x; if(p.y>maxY)maxY=p.y; } } return any?{minX,minY,maxX,maxY}:null; }
+function bboxOfStrokes(){ let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity, any=false; for(const s of strokes.values()){ const b=bboxOfStroke(s); if(b){ any=true; if(b.x<minX)minX=b.x; if(b.y<minY)minY=b.y; if(b.x+b.w>maxX)maxX=b.x+b.w; if(b.y+b.h>maxY)maxY=b.y+b.h; } } return any?{minX,minY,maxX,maxY}:null; }
 
 // локальная персистенция + серверная
 function saveLocal(){ try{ localStorage.setItem('room:'+roomId, JSON.stringify(serializeState())); }catch{} }
