@@ -83,6 +83,10 @@ wss.on('connection', (ws) => {
       const peers = [...room].filter(c => c !== ws).map(c => c.id);
       send(ws, { type: 'joined', id: ws.id, roomId, peers });
 
+      // inform new client about current revision if exists
+      const st = roomStates.get(roomId);
+      if (st && st.rev != null) send(ws, { type: 'state_rev', rev: st.rev });
+
       for (const c of room) if (c !== ws) send(c, { type: 'peer_joined', id: ws.id });
       return;
     }
@@ -110,7 +114,16 @@ wss.on('connection', (ws) => {
 
     // клиент присылает состояние, сохранить
     if (m.type === 'state_save') {
-      if (ws.roomId) roomStates.set(ws.roomId, m.state || null);
+      if (ws.roomId) {
+        const st = m.state || null;
+        roomStates.set(ws.roomId, st);
+        if (st && st.rev != null) {
+          const room = rooms.get(ws.roomId);
+          if (room) {
+            for (const c of room) if (c.readyState === 1) send(c, { type: 'state_rev', rev: st.rev });
+          }
+        }
+      }
       return;
     }
   });

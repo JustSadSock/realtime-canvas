@@ -126,6 +126,12 @@
         peers.delete(m.id);
         return;
       }
+      if (m.type === "state_rev") {
+        if ((m.rev | 0) > (window.rev | 0)) {
+          if (typeof window.schedulePull === "function") window.schedulePull();
+        }
+        return;
+      }
       if (m.type === "state") {
         // серверный снапшот/обновление
         handlers.onState(m.state);
