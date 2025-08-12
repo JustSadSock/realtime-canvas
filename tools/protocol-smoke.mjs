@@ -6,7 +6,7 @@ async function testJoinPresence() {
   const sent = [];
   let joined = null;
   const Net = {
-    connect: (id, h) => {
+    connect: (id, h, url) => {
       joined = id;
       h.onPeerOpen("p1");
     },
@@ -16,8 +16,8 @@ async function testJoinPresence() {
   function sendPresence() {
     Net.sendReliable({ type: "presence", cursorColor });
   }
-  function joinRoom(id) {
-    Net.connect(id, { onPeerOpen: sendPresence });
+  async function joinRoom(id) {
+    Net.connect(id, { onPeerOpen: sendPresence }, "wss://test");
   }
   function renderRooms() {
     return { click: () => joinRoom("r1") };

@@ -1,0 +1,7 @@
+/*
+  Content-Security-Policy: default-src 'self'; img-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: wss: https://*.ngrok.io wss://*.ngrok.io https://*.ngrok-free.app wss://*.ngrok-free.app;
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+
+/config.json
+  Cache-Control: no-store
