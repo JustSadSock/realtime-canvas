@@ -22,6 +22,61 @@ function findITXtRt(pngUint8) {
   return null;
 }
 
+function bboxOfImportedState(state) {
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  for (const s of state?.strokes || []) {
+    if (s.mode === "image") {
+      minX = Math.min(minX, s.x);
+      minY = Math.min(minY, s.y);
+      maxX = Math.max(maxX, s.x + s.w);
+      maxY = Math.max(maxY, s.y + s.h);
+    } else if (s.mode === "raster") {
+      const rh = s.rowH ?? 1;
+      for (const r of s.runs || []) {
+        minX = Math.min(minX, r.x0);
+        minY = Math.min(minY, r.y);
+        maxX = Math.max(maxX, r.x1 + 1);
+        maxY = Math.max(maxY, r.y + rh);
+      }
+    } else {
+      for (const p of s.points || []) {
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+      }
+    }
+  }
+  if (minX === Infinity) return { x: 0, y: 0, w: 0, h: 0 };
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function translateImportedState(state, dx, dy) {
+  for (const s of state?.strokes || []) {
+    if (s.mode === "image") {
+      s.x += dx;
+      s.y += dy;
+    } else if (s.mode === "raster") {
+      s.runs = (s.runs || []).map((r) => ({
+        ...r,
+        x0: r.x0 + dx,
+        x1: r.x1 + dx,
+        y: r.y + dy,
+      }));
+    } else {
+      s.points = (s.points || []).map((p) => ({ x: p.x + dx, y: p.y + dy }));
+    }
+  }
+}
+
+function normalizeStateToOrigin(state) {
+  const bb = bboxOfImportedState(state);
+  translateImportedState(state, -bb.x, -bb.y);
+}
+
 function ensureStyles() {
   if (document.getElementById("raster-import-style")) return;
   const style = document.createElement("style");
@@ -82,8 +137,15 @@ function cleanup() {
 
 function keyHandler(e) {
   if (!placement) return;
-  if (e.key === "Escape") cleanup();
-  if (e.key === "Enter") finalize();
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    cleanup();
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    e.stopPropagation();
+    finalize();
+  }
 }
 
 document.addEventListener("keydown", keyHandler);
@@ -93,6 +155,9 @@ function startOverlay(img, state) {
   window.importActive = true;
   overlay = document.createElement("div");
   overlay.className = "import-overlay";
+  overlay.tabIndex = -1;
+  document.activeElement && document.activeElement.blur();
+  overlay.focus?.();
   overlay.addEventListener("pointerdown", (e) => e.stopPropagation());
   overlay.addEventListener("pointermove", (e) => e.stopPropagation(), {
     passive: true,
@@ -125,10 +190,6 @@ function startOverlay(img, state) {
   const badge = document.createElement("div");
   badge.className = "sizebadge";
   frame.appendChild(badge);
-  const hint = document.createElement("div");
-  hint.className = "hint";
-  hint.textContent = "Enter — разместить, Esc — отмена, Shift — фиксировать пропорции";
-  frame.appendChild(hint);
   overlay.appendChild(frame);
   const stage = document.getElementById("stage");
   stage.appendChild(overlay);
@@ -358,12 +419,62 @@ function vectorizeToRasterRuns(imgCanvas, worldTransform, opts = {}) {
   return stroke;
 }
 
+function vectorizeToBrushStrokes(imgCanvas, worldTransform, opts = {}) {
+  const MAX_STROKES = opts.maxStrokes ?? 80000;
+  let src = imgCanvas;
+  let step = opts.quantStep ?? 16;
+  let runs = extractRuns(src, step);
+
+  while (runs.length > MAX_STROKES && (src.width > 1 || src.height > 1)) {
+    src = downscaleCanvas(src, 0.5);
+    runs = extractRuns(src, step);
+    if (runs.length > MAX_STROKES && step < 256) {
+      step *= 2;
+      runs = extractRuns(src, step);
+    }
+  }
+
+  const pixelScale = imgCanvas.width / src.width;
+  const sizeRaw = pixelScale * worldTransform.scale;
+  const size = Math.max(1, Math.round(sizeRaw));
+  const chunk = opts.chunk ?? Math.max(2, size - 1);
+
+  const strokes = [];
+  for (const r of runs) {
+    for (let x = r.x0; x <= r.x1; x += chunk) {
+      const xEnd = Math.min(r.x1, x + chunk - 1);
+      const x0w = Math.round(x * pixelScale * worldTransform.scale + worldTransform.x);
+      const x1w = Math.round((xEnd + 1) * pixelScale * worldTransform.scale + worldTransform.x);
+      const yw = Math.round(r.y * pixelScale * worldTransform.scale + worldTransform.y);
+      const yCenter = size % 2 === 1 ? yw + 0.5 : yw;
+
+      strokes.push({
+        id:
+          window.genId?.() ??
+          `br-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        by: window.meId ?? "local",
+        mode: "draw",
+        color: r.color,
+        size,
+        cap: "butt",
+        join: "miter",
+        points: [{ x: x0w, y: yCenter }, { x: x1w, y: yCenter }],
+      });
+
+      if (strokes.length > MAX_STROKES) break;
+    }
+    if (strokes.length > MAX_STROKES) break;
+  }
+  return strokes;
+}
+
 async function finalize() {
   if (!placement) return;
   const { img, state } = placement;
   const worldTopLeft = window.screenToWorld(placement.x, placement.y);
   const scale = (placement.w / img.width) / window.camera.scale;
   if (state) {
+    // embedded — already normalized to (0,0)
     applyTransformToState(state, { x: worldTopLeft.x, y: worldTopLeft.y, scale });
     window.mergeState(state);
     if (state.strokes)
@@ -374,16 +485,28 @@ async function finalize() {
         window.Net.sendReliable({ type: "add", stroke: payload });
       }
   } else {
-    const stroke = vectorizeToRasterRuns(img, {
-      x: worldTopLeft.x,
-      y: worldTopLeft.y,
-      scale,
-    });
-    window.mergeState({ strokes: [stroke] });
-    window.myStack.push(stroke.id);
-    const payload = { ...stroke };
-    delete payload._bbox;
-    window.Net.sendReliable({ type: "add", stroke: payload });
+    // external PNG → brushify
+    const strokes = vectorizeToBrushStrokes(
+      img,
+      {
+        x: worldTopLeft.x,
+        y: worldTopLeft.y,
+        scale,
+      },
+      { quantStep: 16, maxStrokes: 80000 },
+    );
+
+    window.mergeState({ strokes });
+    let ops = [];
+    for (const s of strokes) {
+      window.myStack.push(s.id);
+      ops.push({ type: "add", stroke: s });
+      if (ops.length >= 1000) {
+        window.Net.sendReliable({ type: "batch", ops });
+        ops = [];
+      }
+    }
+    if (ops.length) window.Net.sendReliable({ type: "batch", ops });
   }
   window.requestRender();
   window.debounceSave && window.debounceSave();
@@ -396,6 +519,7 @@ export async function beginImport(fileOrBlob) {
   let state = null;
   try {
     state = findITXtRt(buf);
+    if (state?.strokes?.length) normalizeStateToOrigin(state);
   } catch {
     // ignore non-PNG files
   }

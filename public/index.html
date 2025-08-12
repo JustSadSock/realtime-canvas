@@ -732,6 +732,7 @@
     const file = e.target.files[0];
     if (file) await window.beginImport(file);
     e.target.value = "";
+    e.target.blur();
   };
   document.addEventListener("paste", async (e) => {
     const item = [...(e.clipboardData?.items || [])].find(
@@ -1691,8 +1692,8 @@
         continue;
       }
       ctx.save();
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
+      ctx.lineJoin = s.join || "round";
+      ctx.lineCap = s.cap || "round";
       setCompositeForTool(ctx, s.mode);
       ctx.strokeStyle = s.mode === "erase" ? "#000000" : s.color;
       ctx.lineWidth = s.size * camera.scale;
