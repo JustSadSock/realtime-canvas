@@ -25,6 +25,9 @@
       Roboto,
       Arial;
   }
+  body.in-stage {
+    overflow: hidden;
+  }
   .wrap {
     max-width: 800px;
     margin: 20px auto;
@@ -180,7 +183,7 @@
 
   /* Desktop: top full-width, одна строка */
   @media (min-width: 769px) and (pointer: fine) {
-    #toolbar {
+    #toolbar[data-show="1"] {
       position: fixed;
       top: 8px;
       left: 8px;
@@ -199,7 +202,7 @@
 
   /* Mobile: bottom full-width, перенос в 2 строки при нехватке места */
   @media (max-width: 768px), (pointer: coarse) {
-    #toolbar {
+    #toolbar[data-show="1"] {
       position: fixed;
       left: 0;
       right: 0;
@@ -446,7 +449,7 @@
     }
     // считаем инсет только когда тулбар виден и мы в мобильной раскладке
     let inset = 0;
-    if (isMobileUI() && tb.style.display !== "none") {
+    if (isMobileUI() && tb.dataset.show === "1") {
       const h = tb.getBoundingClientRect().height; // 1 или 2 строки
       inset = Math.ceil(h + 8);
     }
@@ -914,7 +917,8 @@
   function lobbyToStage() {
     document.getElementById("lobby").style.display = "none";
     document.getElementById("stage").style.display = "block";
-    document.getElementById("toolbar").style.display = "flex";
+    document.body.classList.add("in-stage");
+    document.getElementById("toolbar").dataset.show = "1";
     resize();
     adjustBottomInset();
   }
@@ -2028,8 +2032,9 @@
       pullTimer = null;
     }
     document.getElementById("stage").style.display = "none";
-    document.getElementById("toolbar").style.display = "none";
     document.getElementById("lobby").style.display = "block";
+    document.body.classList.remove("in-stage");
+    delete document.getElementById("toolbar").dataset.show;
     document.documentElement.style.setProperty("--stage-bottom-inset", "0px");
     resize();
     renderRooms();
