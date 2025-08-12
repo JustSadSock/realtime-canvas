@@ -349,6 +349,7 @@
 </div>
 
 <script type="module" src="embed-png.js"></script>
+<script>window.schedulePull ||= function(){};</script>
 <script src="net-webrtc.js"></script>
 <script type="module">
   import { exportEmbeddedPNG, importPNG } from "./embed-png.js";
@@ -412,6 +413,11 @@
   let roomId = null,
     meId = null; // мой peer id
   let rev = 0; // ревизия состояния (монотонно растёт)
+  window.rev = rev;
+  function setRev(v) {
+    rev = v | 0;
+    window.rev = rev;
+  }
   let mode = "draw";
   let brush = { color: "#000000", size: 6 };
   let bgColor = "#ffffff";
@@ -463,6 +469,7 @@
   const cache = new Map(); // полный штрих (для redo/ресинка)
   const myStack = []; // ids моих штрихов (для undo)
   const redoStack = []; // ids для redo
+  const deleted = new Set();
 
   const patternCanvas = document.createElement("canvas");
   patternCanvas.width = 8;
@@ -714,7 +721,13 @@
   };
 
   function joinRoom(id) {
+    setRev(0);
     roomId = id;
+    lastPull = 0;
+    if (pullTimer) {
+      clearTimeout(pullTimer);
+      pullTimer = null;
+    }
     lobbyToStage();
     Net.connect(roomId, {
       onJoined: ({ me, roomId, peers }) => {
@@ -779,6 +792,7 @@
           strokes.delete(current.id);
           cache.delete(current.id);
           myStack.pop();
+          deleted.add(current.id);
           enqueue({ type: "del", id: current.id });
           requestRender();
         }
@@ -856,6 +870,7 @@
     };
     strokes.set(current.id, current);
     cache.set(current.id, current);
+    deleted.delete(current.id);
     myStack.push(current.id);
     redoStack.length = 0;
     enqueue({
@@ -1074,6 +1089,7 @@
     if (e.key === "Delete" && selection) {
       for (const id of selection.ids) {
         strokes.delete(id);
+        deleted.add(id);
         Net.sendReliable({ type: "del", id });
       }
       selection = null;
@@ -1543,6 +1559,7 @@
         };
         strokes.set(op.id, s);
         cache.set(op.id, s);
+        deleted.delete(op.id);
       }
       for (const p of op.points) s.points.push(p);
       requestRender();
@@ -1564,12 +1581,14 @@
       };
       strokes.set(op.id, s);
       cache.set(op.id, s);
+      deleted.delete(op.id);
       requestRender();
       debounceSave();
       return;
     }
     if (op.type === "del") {
       strokes.delete(op.id);
+      deleted.add(op.id);
       requestRender();
       debounceSave();
       return;
@@ -1579,6 +1598,7 @@
       if (s.mode === "image") loadImageForStroke(s);
       strokes.set(s.id, s);
       cache.set(s.id, s);
+      deleted.delete(s.id);
       requestRender();
       debounceSave();
       return;
@@ -1606,12 +1626,11 @@
 
   function serializeState() {
     // ВАЖНО: не инкрементим здесь — просто возвращаем текущее
-    return { bg: bgColor, strokes: Array.from(strokes.values()), rev };
+    return { bg: bgColor, strokes: Array.from(strokes.values()), rev, deleted: [...deleted] };
   }
   function mergeState(state, opt = {}) {
     try {
       let changed = false;
-      const oldRev = rev | 0;
       if (state && typeof state.bg === "string") {
         bgColor = state.bg;
         drawGrid();
@@ -1623,23 +1642,33 @@
             if (s.mode === "image") loadImageForStroke(s);
             strokes.set(s.id, s);
             cache.set(s.id, s);
+            deleted.delete(s.id);
             changed = true;
           } else if ((had.points?.length || 0) < (s.points?.length || 0)) {
             if (s.mode === "image") loadImageForStroke(s);
             strokes.set(s.id, s);
             cache.set(s.id, s);
+            deleted.delete(s.id);
             changed = true;
           }
         }
       }
+      if (state && Array.isArray(state.deleted)) {
+        for (const id of state.deleted) {
+          strokes.delete(id);
+          deleted.add(id);
+        }
+        if (state.deleted.length) changed = true;
+      }
       // поднять локальную ревизию до серверной/чужой
       const srvRev = state && typeof state.rev === "number" ? (state.rev | 0) : 0;
-      if (srvRev > rev) rev = srvRev;
+      if (srvRev > rev) setRev(srvRev);
       requestRender();
       // ВАЖНО:
       // - если это серверный state → НЕ сохраняем (чтобы не было петли)
       // - если это peer state_full (opt.fromServer=false) или локальное изменение → сохраняем
       if (!opt.fromServer && changed) debounceSave();
+      return changed;
     } catch (e) {}
   }
 
@@ -1668,6 +1697,7 @@
     if (!id) return;
     Net.sendReliable({ type: "del", id });
     strokes.delete(id);
+    deleted.add(id);
     redoStack.push(id);
     requestRender();
     debounceSave();
@@ -1678,6 +1708,7 @@
     const s = cache.get(id);
     if (!s) return;
     strokes.set(id, s);
+    deleted.delete(id);
     const payload = { ...s };
     Net.sendReliable({ type: "add", stroke: payload });
     myStack.push(id);
@@ -1702,11 +1733,17 @@
 
   function leaveRoom() {
     Net.disconnect();
+    setRev(0);
     roomId = null;
     strokes.clear();
     cache.clear();
     myStack.length = 0;
     redoStack.length = 0;
+    deleted.clear();
+    if (pullTimer) {
+      clearTimeout(pullTimer);
+      pullTimer = null;
+    }
     $("#stage").style.display = "none";
     $("#toolbar").style.display = "none";
     $("#lobby").style.display = "block";
@@ -1730,21 +1767,43 @@
   }
   let saveTimer = null;
   function debounceSave() {
-    if (saveTimer) return;
+    if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      // инкремент до отправки
-      rev = (rev | 0) + 1;
+      setRev((rev | 0) + 1);
       saveLocal();
       Net.saveState(serializeState());
-    }, 300);
+    }, 700);
   }
+
+  let pullTimer = null,
+    lastPull = 0;
+  function schedulePull() {
+    if (pullTimer) return;
+    const now = Date.now();
+    const wait = Math.max(0, 500 - (now - lastPull));
+    pullTimer = setTimeout(() => {
+      pullTimer = null;
+      lastPull = Date.now();
+      try {
+        Net.requestState();
+      } catch {}
+    }, wait);
+  }
+  window.schedulePull = schedulePull;
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       // поднимем ревизию и сохраним
-      rev = (rev | 0) + 1;
+      setRev((rev | 0) + 1);
       Net.saveState(serializeState());
     }
+  });
+
+  window.addEventListener("beforeunload", () => {
+    try {
+      setRev((rev | 0) + 1);
+      Net.saveState(serializeState());
+    } catch {}
   });
 </script>
