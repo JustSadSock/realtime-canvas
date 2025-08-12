@@ -416,27 +416,29 @@
 <script src="net-webrtc.js"></script>
 <script type="module">
   import { exportEmbeddedPNG } from "./embed-png.js";
-  let DPR = 1;
-  // ===== early app state (должно быть объявлено ДО первого resize/drawGrid) =====
-  let bgColor = "#ffffff"; // дефолт фона для drawGrid на раннем старте
-  let camera = { x: 0, y: 0, scale: 1 }; // камера нужна до первого drawGrid
-  let gridColor = "#cccccc"; // цвет сетки по умолчанию
+  // ===== app state (создать ДО любых функций) =====
+  const app = {
+    ready: false,
+
+    DPR: 1,
+    bgColor: "#ffffff",
+
+    grid: null,
+    gtx: null,
+    cvs: null,
+    ctx: null,
+
+    camera: { x: 0, y: 0, scale: 1 },
+
+    importActive: false,
+    gridColor: "#cccccc",
+  };
+
   // ===== util =====
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
   const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-  // ===== canvases & camera =====
-  const grid = $("#grid"),
-    gtx = grid.getContext("2d");
-  const cvs = $("#cvs"),
-    ctx = cvs.getContext("2d");
-  cvs.addEventListener("dblclick", (e) => e.preventDefault(), {
-    passive: false,
-  });
-  ["gesturestart", "gesturechange", "gestureend"].forEach((evt) =>
-    cvs.addEventListener(evt, (e) => e.preventDefault(), { passive: false }),
-  );
   function isMobileUI() {
     return matchMedia("(max-width: 768px), (pointer: coarse)").matches;
   }
@@ -448,6 +450,7 @@
     return Number.isFinite(n) ? n : 0;
   }
   function adjustBottomInset() {
+    if (!app.ctx) return; // guard
     const tb = document.getElementById("toolbar");
     if (!tb) {
       return;
@@ -466,45 +469,29 @@
     // пересчёт размеров канвасов под новый инсет
     resize();
   }
-  if ("ResizeObserver" in window) {
-    new ResizeObserver(adjustBottomInset).observe(
-      document.getElementById("toolbar"),
-    );
-  } else {
-    addEventListener("resize", () => setTimeout(adjustBottomInset, 0));
-  }
-  adjustBottomInset();
-  addEventListener("orientationchange", () =>
-    setTimeout(adjustBottomInset, 200),
-  );
-  {
-    const mql = matchMedia("(max-width: 768px), (pointer: coarse)");
-    if (mql.addEventListener) {
-      mql.addEventListener("change", adjustBottomInset);
-    } else if (mql.addListener) {
-      mql.addListener(adjustBottomInset);
-    }
-  }
 
   function resize() {
+    if (!app.ctx || !app.gtx) return; // guard
+
+    const dpr = Math.max(1, devicePixelRatio || 1);
+    app.DPR = dpr;
+
     const w = innerWidth;
-    // уменьшаем высоту сцены на мобильном на величину инсета
     const inset = isMobileUI() ? getStageInsetPx() : 0;
     const h = Math.max(0, innerHeight - inset);
-    const dpr = Math.max(1, devicePixelRatio || 1);
-    DPR = dpr;
-    [grid, cvs].forEach((cn) => {
+
+    for (const cn of [app.grid, app.cvs]) {
       cn.width = w * dpr;
       cn.height = h * dpr;
       cn.style.width = w + "px";
       cn.style.height = h + "px";
-    });
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    gtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    app.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    app.gtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
     drawGrid();
     requestRender();
   }
-  addEventListener("resize", resize, { passive: true });
 
   function setCompositeForTool(context, tool) {
     context.globalCompositeOperation =
@@ -512,28 +499,114 @@
   }
 
   function drawGrid() {
-    const w = grid.width / DPR,
-      h = grid.height / DPR;
-    gtx.fillStyle = typeof bgColor === "string" ? bgColor : "#ffffff";
-    gtx.fillRect(0, 0, w, h);
-    const step = 100 * camera.scale;
+    if (!app.gtx || !app.grid) return; // guard
+
+    const w = app.grid.width / app.DPR,
+      h = app.grid.height / app.DPR;
+    app.gtx.fillStyle =
+      typeof app.bgColor === "string" ? app.bgColor : "#ffffff";
+    app.gtx.fillRect(0, 0, w, h);
+    const step = 100 * app.camera.scale;
     if (step > 24) {
-      gtx.strokeStyle = gridColor;
-      gtx.lineWidth = 1;
-      const sx = -((camera.x * camera.scale) % step),
-        sy = -((camera.y * camera.scale) % step);
-      gtx.beginPath();
+      app.gtx.strokeStyle = app.gridColor;
+      app.gtx.lineWidth = 1;
+      const sx = -((app.camera.x * app.camera.scale) % step),
+        sy = -((app.camera.y * app.camera.scale) % step);
+      app.gtx.beginPath();
       for (let x = sx; x < w; x += step) {
-        gtx.moveTo(x, 0);
-        gtx.lineTo(x, h);
+        app.gtx.moveTo(x, 0);
+        app.gtx.lineTo(x, h);
       }
       for (let y = sy; y < h; y += step) {
-        gtx.moveTo(0, y);
-        gtx.lineTo(w, y);
+        app.gtx.moveTo(0, y);
+        app.gtx.lineTo(w, y);
       }
-      gtx.stroke();
+      app.gtx.stroke();
     }
   }
+
+  function boot() {
+    if (app.ready) return; // защитимся от повторного запуска
+    // Привязки DOM и контекстов
+    app.grid = document.getElementById("grid");
+    app.gtx = app.grid.getContext("2d");
+    app.cvs = document.getElementById("cvs");
+    app.ctx = app.cvs.getContext("2d");
+
+    // Загрузка настроек/горячих клавиш/цветов и т.п.
+    loadSettings?.();
+    updateSelPattern();
+    renderHint();
+    setTool(mode);
+    setSize(brush.size);
+    setColor(brush.color, $("#color"));
+
+    // Навесить слушатели ТОЛЬКО сейчас
+    addEventListener("resize", resize, { passive: true });
+
+    app.cvs.addEventListener("dblclick", (e) => e.preventDefault(), {
+      passive: false,
+    });
+    ["gesturestart", "gesturechange", "gestureend"].forEach((evt) =>
+      app.cvs.addEventListener(evt, (e) => e.preventDefault(), { passive: false }),
+    );
+    app.cvs.addEventListener("dragover", onCanvasDragOver);
+    app.cvs.addEventListener("drop", onCanvasDrop);
+    app.cvs.addEventListener("pointerdown", onPointerDown);
+    app.cvs.addEventListener("pointermove", onPointerMove);
+    app.cvs.addEventListener("pointerup", onPointerUp);
+    app.cvs.addEventListener("pointercancel", onPointerCancel);
+    app.cvs.addEventListener("wheel", onWheel, { passive: false });
+
+    if ("ResizeObserver" in window) {
+      new ResizeObserver(adjustBottomInset).observe(
+        document.getElementById("toolbar"),
+      );
+    } else {
+      addEventListener("resize", () => setTimeout(adjustBottomInset, 0));
+    }
+    addEventListener("orientationchange", () =>
+      setTimeout(adjustBottomInset, 200),
+    );
+    {
+      const mql = matchMedia("(max-width: 768px), (pointer: coarse)");
+      if (mql.addEventListener) {
+        mql.addEventListener("change", adjustBottomInset);
+      } else if (mql.addListener) {
+        mql.addListener(adjustBottomInset);
+      }
+    }
+
+    // Совместимость с внешними модулями
+    const d = (get, set) => ({
+      get,
+      set,
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperties(window, {
+      camera: d(() => app.camera),
+      DPR: d(() => app.DPR),
+      importActive: d(() => app.importActive, (v) => (app.importActive = !!v)),
+      cvs: d(() => app.cvs),
+      grid: d(() => app.grid),
+      ctx: d(() => app.ctx),
+      gtx: d(() => app.gtx),
+    });
+
+    app.ready = true; // барьер опускаем
+
+    // Первый layout и первый рендер
+    adjustBottomInset();
+    requestRender();
+    if (typeof loop === "function") requestAnimationFrame(loop);
+  }
+
+  // Гарантированный запуск: если DOM ещё грузится — ждём, иначе — микротаск,
+  // чтобы все let-переменные (напр. cursorColor) успели инициализироваться.
+  if (document.readyState === "loading")
+    document.addEventListener("DOMContentLoaded", boot, { once: true });
+  else queueMicrotask(boot);
 
   // ===== state =====
   let roomId = null,
@@ -550,7 +623,6 @@
     selOp = null,
     selectionPreview = null;
   let cursorColor = "#007aff";
-  window.importActive = false;
   const defaultHotkeys = {
     draw: "1",
     erase: "2",
@@ -584,12 +656,11 @@
     cursorsMeta.set(meId, { color: cursorColor });
     Net.sendReliable({ type: "presence", cursorColor });
   }
-  loadSettings();
+  // настройки будут загружены в boot()
   function renderHint() {
     $("#hint").textContent =
       `Кисть: ${hotkeys.draw} • Ластик: ${hotkeys.erase} • Выделение: ${hotkeys.select} • Заливка: ${hotkeys.fill} • Размер: ${hotkeys.size2}/${hotkeys.size6}/${hotkeys.size12}/${hotkeys.size24} • Колёсико: зум • Shift+колёсико: панорама • Shift при импорте: фиксирует пропорции • Средняя кнопка: перетаскивание`;
   }
-  renderHint();
 
   const strokes = new Map(); // id-> {id,by,mode,...}
   const cache = new Map(); // полный штрих (для redo/ресинка)
@@ -604,7 +675,9 @@
   patternCanvas.height = 8;
   const ptx = patternCanvas.getContext("2d");
   let selPattern = null;
+  // Requires app.ctx; call only after boot() initializes contexts
   function updateSelPattern() {
+    if (!app?.ctx) return;
     ptx.clearRect(0, 0, 8, 8);
     ptx.strokeStyle = cursorColor;
     ptx.lineWidth = 1;
@@ -614,9 +687,9 @@
     ptx.moveTo(0, 8);
     ptx.lineTo(8, 0);
     ptx.stroke();
-    selPattern = ctx.createPattern(patternCanvas, "repeat");
+    selPattern = app.ctx.createPattern(patternCanvas, "repeat");
   }
-  updateSelPattern();
+  // будет вызвано в boot() после инициализации контекста
 
   // ===== UI wiring =====
   const toolButtons = $$(".tool");
@@ -688,17 +761,14 @@
   }
   $("#color").oninput = (e) => setColor(e.target.value, $("#color"));
   colorInputs.forEach((b) => (b.onclick = () => setColor(b.dataset.c, b)));
-  setTool(mode);
-  setSize(brush.size);
-  setColor(brush.color, $("#color"));
   $("#bg").oninput = (e) => {
-    bgColor = e.target.value;
+    app.bgColor = e.target.value;
     drawGrid();
     requestRender();
     debounceSave();
   };
   $("#gridColor").oninput = (e) => {
-    gridColor = e.target.value;
+    app.gridColor = e.target.value;
     drawGrid();
   };
   $("#undo").onclick = undo;
@@ -745,14 +815,18 @@
       if (file) await window.beginImport(file);
     }
   });
-  cvs.addEventListener("dragover", (e) => {
+  function onCanvasDragOver(e) {
+    if (!app.ready) return;
+    if (app.importActive) return;
     e.preventDefault();
-  });
-  cvs.addEventListener("drop", async (e) => {
+  }
+  async function onCanvasDrop(e) {
+    if (!app.ready) return;
+    if (app.importActive) return;
     e.preventDefault();
     const file = e.dataTransfer.files[0];
     if (file) await window.beginImport(file);
-  });
+  }
   window.addEventListener("dragover", (e) => {
     e.preventDefault();
   });
@@ -763,7 +837,8 @@
   });
 
   document.addEventListener("keydown", (e) => {
-    if (window.importActive) return;
+    if (!app.ready) return;
+    if (app.importActive) return;
     if (e.target.tagName === "INPUT") return;
     const k = e.key;
     if (k === hotkeys.draw) setTool("draw");
@@ -995,12 +1070,14 @@
     return { center, dist };
   }
 
-  cvs.addEventListener("pointerdown", (e) => {
-    cvs.setPointerCapture(e.pointerId);
+  function onPointerDown(e) {
+    if (!app.ready) return;
+    if (app.importActive) return;
+    app.cvs.setPointerCapture(e.pointerId);
     if (e.pointerType === "touch") {
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2) {
-        pinchStart = { camera: { ...camera }, ...getTouchState() };
+        pinchStart = { camera: { ...app.camera }, ...getTouchState() };
         if (current) {
           strokes.delete(current.id);
           cache.delete(current.id);
@@ -1017,9 +1094,9 @@
     isDown = true;
     if (mode === "pipette") {
       const w = toWorld(e);
-      const x = Math.round((w.x - camera.x) * camera.scale * DPR);
-      const y = Math.round((w.y - camera.y) * camera.scale * DPR);
-      const d = ctx.getImageData(x, y, 1, 1).data;
+      const x = Math.round((w.x - app.camera.x) * app.camera.scale * app.DPR);
+      const y = Math.round((w.y - app.camera.y) * app.camera.scale * app.DPR);
+      const d = app.ctx.getImageData(x, y, 1, 1).data;
       const c =
         "#" +
         ((1 << 24) + (d[0] << 16) + (d[1] << 8) + d[2]).toString(16).slice(1);
@@ -1041,7 +1118,7 @@
       if (selection) {
         const r = selection.rect;
         const hit = pointInRect(w, r);
-        const corner = hitCorner(w, r, 10 / camera.scale);
+        const corner = hitCorner(w, r, 10 / app.camera.scale);
         if (corner) {
           selOp = {
             type: "resize",
@@ -1097,9 +1174,11 @@
       points: [w],
     });
     requestRender();
-  });
+  }
 
-  cvs.addEventListener("pointermove", (e) => {
+  function onPointerMove(e) {
+    if (!app.ready) return;
+    if (app.importActive) return;
     if (e.pointerType === "touch" && touches.has(e.pointerId)) {
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2 && pinchStart) {
@@ -1109,14 +1188,14 @@
           pinchStart.center.y,
           pinchStart.camera,
         );
-        camera.scale = clamp(
+        app.camera.scale = clamp(
           pinchStart.camera.scale * (dist / pinchStart.dist),
           0.1,
           8,
         );
         const after = screenToWorld(center.x, center.y);
-        camera.x += before.x - after.x;
-        camera.y += before.y - after.y;
+        app.camera.x += before.x - after.x;
+        app.camera.y += before.y - after.y;
         drawGrid();
         requestRender();
         return;
@@ -1126,8 +1205,8 @@
     const w = toWorld(e);
     if (e.buttons === 4 || (isDown && e.button === 1)) {
       if (lastMove) {
-        camera.x -= (e.clientX - lastMove.x) / camera.scale;
-        camera.y -= (e.clientY - lastMove.y) / camera.scale;
+        app.camera.x -= (e.clientX - lastMove.x) / app.camera.scale;
+        app.camera.y -= (e.clientY - lastMove.y) / app.camera.scale;
         drawGrid();
         requestRender();
       }
@@ -1255,9 +1334,11 @@
       }
     }
     Net.sendCursor({ x: w.x, y: w.y, drawing: isDown });
-  });
+  }
 
-  cvs.addEventListener("pointerup", (e) => {
+  function onPointerUp(e) {
+    if (!app.ready) return;
+    if (app.importActive) return;
     if (e.pointerType === "touch") {
       touches.delete(e.pointerId);
       if (pinchStart) {
@@ -1316,40 +1397,41 @@
       rasterDirty.clear();
       debounceSave();
     }
-  });
+  }
 
-  cvs.addEventListener("pointercancel", (e) => {
+  function onPointerCancel(e) {
+    if (!app.ready) return;
+    if (app.importActive) return;
     touches.delete(e.pointerId);
     pinchStart = null;
-  });
+  }
 
   // зум/пан колесом
-  cvs.addEventListener(
-    "wheel",
-    (e) => {
-      e.preventDefault();
-      const mouse = { clientX: e.clientX, clientY: e.clientY };
-      if (e.shiftKey) {
-        camera.x -= e.deltaX / camera.scale;
-        camera.y -= e.deltaY / camera.scale;
-        drawGrid();
-        requestRender();
-        return;
-      }
-      const before = toWorld(mouse);
-      const k = Math.pow(1.0015, -e.deltaY);
-      camera.scale = clamp(camera.scale * k, 0.1, 8);
-      const after = toWorld(mouse);
-      camera.x += before.x - after.x;
-      camera.y += before.y - after.y;
+  function onWheel(e) {
+    if (!app.ready) return;
+    if (app.importActive) return;
+    e.preventDefault();
+    const mouse = { clientX: e.clientX, clientY: e.clientY };
+    if (e.shiftKey) {
+      app.camera.x -= e.deltaX / app.camera.scale;
+      app.camera.y -= e.deltaY / app.camera.scale;
       drawGrid();
       requestRender();
-    },
-    { passive: false },
-  );
+      return;
+    }
+    const before = toWorld(mouse);
+    const k = Math.pow(1.0015, -e.deltaY);
+    app.camera.scale = clamp(app.camera.scale * k, 0.1, 8);
+    const after = toWorld(mouse);
+    app.camera.x += before.x - after.x;
+    app.camera.y += before.y - after.y;
+    drawGrid();
+    requestRender();
+  }
 
   addEventListener("keydown", (e) => {
-    if (window.importActive) return;
+    if (!app.ready) return;
+    if (app.importActive) return;
     if (e.key === "Delete" && selection) {
       for (const id of selection.ids) {
         strokes.delete(id);
@@ -1364,11 +1446,11 @@
 
   function toWorld(e) {
     return {
-      x: e.clientX / camera.scale + camera.x,
-      y: e.clientY / camera.scale + camera.y,
+      x: e.clientX / app.camera.scale + app.camera.x,
+      y: e.clientY / app.camera.scale + app.camera.y,
     };
   }
-  function screenToWorld(x, y, cam = camera) {
+  function screenToWorld(x, y, cam = app.camera) {
     return { x: x / cam.scale + cam.x, y: y / cam.scale + cam.y };
   }
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -1584,12 +1666,12 @@
   }
 
   function performFill(w) {
-    const x = Math.round((w.x - camera.x) * camera.scale * DPR);
-    const y = Math.round((w.y - camera.y) * camera.scale * DPR);
-    const W = cvs.width,
-      H = cvs.height;
+    const x = Math.round((w.x - app.camera.x) * app.camera.scale * app.DPR);
+    const y = Math.round((w.y - app.camera.y) * app.camera.scale * app.DPR);
+    const W = app.cvs.width,
+      H = app.cvs.height;
     if (x < 0 || y < 0 || x >= W || y >= H) return;
-    const img = ctx.getImageData(0, 0, W, H);
+    const img = app.ctx.getImageData(0, 0, W, H);
     const data = img.data;
     const idx = (y * W + x) * 4;
     const target = [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
@@ -1646,9 +1728,9 @@
     }
     ox.putImageData(outImg, 0, 0);
     const stroke = window.vectorizeToRasterRuns(off, {
-      x: camera.x,
-      y: camera.y,
-      scale: 1 / (camera.scale * DPR),
+      x: app.camera.x,
+      y: app.camera.y,
+      scale: 1 / (app.camera.scale * app.DPR),
     });
     mergeState({ strokes: [stroke] });
     myStack.push(stroke.id);
@@ -1694,70 +1776,70 @@
     }
     requestAnimationFrame(loop);
   }
-  loop();
   function draw() {
-    const vw = cvs.width / DPR,
-      vh = cvs.height / DPR;
-    ctx.clearRect(0, 0, vw, vh);
+    if (!app.ctx || !app.cvs) return;
+    const vw = app.cvs.width / app.DPR,
+      vh = app.cvs.height / app.DPR;
+    app.ctx.clearRect(0, 0, vw, vh);
     for (const s of strokes.values()) {
       if (s.mode === "image") {
         if (s._img) {
-          const prevSmooth = ctx.imageSmoothingEnabled;
-          ctx.imageSmoothingEnabled = false;
-          ctx.drawImage(
+          const prevSmooth = app.ctx.imageSmoothingEnabled;
+          app.ctx.imageSmoothingEnabled = false;
+          app.ctx.drawImage(
             s._img,
-            (s.x - camera.x) * camera.scale,
-            (s.y - camera.y) * camera.scale,
-            s.w * camera.scale,
-            s.h * camera.scale,
+            (s.x - app.camera.x) * app.camera.scale,
+            (s.y - app.camera.y) * app.camera.scale,
+            s.w * app.camera.scale,
+            s.h * app.camera.scale,
           );
-          ctx.imageSmoothingEnabled = prevSmooth;
+          app.ctx.imageSmoothingEnabled = prevSmooth;
         }
         continue;
       }
       if (s.mode === "raster") {
         if (!s._bbox) updateRasterBBox(s);
-        const scale = camera.scale;
+        const scale = app.camera.scale;
         const vx1 = vw,
           vy1 = vh;
-        const bx0 = (s._bbox.x - camera.x) * scale;
-        const by0 = (s._bbox.y - camera.y) * scale;
-        const bx1 = (s._bbox.x + s._bbox.w - camera.x) * scale;
-        const by1 = (s._bbox.y + s._bbox.h - camera.y) * scale;
+        const bx0 = (s._bbox.x - app.camera.x) * scale;
+        const by0 = (s._bbox.y - app.camera.y) * scale;
+        const bx1 = (s._bbox.x + s._bbox.w - app.camera.x) * scale;
+        const by1 = (s._bbox.y + s._bbox.h - app.camera.y) * scale;
         if (bx1 < 0 || bx0 > vx1 || by1 < 0 || by0 > vy1) continue;
         let last = "";
         for (const r of s.runs) {
           if (r.color !== last) {
-            ctx.fillStyle = r.color;
+            app.ctx.fillStyle = r.color;
             last = r.color;
           }
           // левая/верхняя границы — floor; правая/нижняя — ceil с учётом включительного конца
-          const x0p = Math.floor((r.x0 - camera.x) * scale);
-          const x1p = Math.ceil((r.x1 + 1 - camera.x) * scale);
-          const y0p = Math.floor((r.y - camera.y) * scale);
-          const y1p = Math.ceil((r.y + (s.rowH ?? 1) - camera.y) * scale);
+          const x0p = Math.floor((r.x0 - app.camera.x) * scale);
+          const x1p = Math.ceil((r.x1 + 1 - app.camera.x) * scale);
+          const y0p = Math.floor((r.y - app.camera.y) * scale);
+          const y1p = Math.ceil((r.y + (s.rowH ?? 1) - app.camera.y) * scale);
           if (x1p < 0 || x0p > vx1 || y1p < 0 || y0p > vy1) continue;
           const rw = Math.max(1, x1p - x0p);
           const rh = Math.max(1, y1p - y0p);
-          ctx.fillRect(x0p, y0p, rw, rh);
+          app.ctx.fillRect(x0p, y0p, rw, rh);
         }
         continue;
       }
-      ctx.save();
-      ctx.lineJoin = s.join || "round";
-      ctx.lineCap = s.cap || "round";
-      setCompositeForTool(ctx, s.mode);
-      ctx.strokeStyle = s.mode === "erase" ? "#000000" : s.color;
-      ctx.lineWidth = s.size * camera.scale;
-      ctx.beginPath();
+      app.ctx.save();
+      app.ctx.lineJoin = s.join || "round";
+      app.ctx.lineCap = s.cap || "round";
+      setCompositeForTool(app.ctx, s.mode);
+      app.ctx.strokeStyle = s.mode === "erase" ? "#000000" : s.color;
+      app.ctx.lineWidth = s.size * app.camera.scale;
+      app.ctx.beginPath();
       s.points.forEach((p, i) => {
-        const x = (p.x - camera.x) * camera.scale,
-          y = (p.y - camera.y) * camera.scale;
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+        const x = (p.x - app.camera.x) * app.camera.scale,
+          y = (p.y - app.camera.y) * app.camera.scale;
+        if (i === 0) app.ctx.moveTo(x, y);
+        else app.ctx.lineTo(x, y);
       });
-      ctx.stroke();
-      ctx.restore();
+      app.ctx.stroke();
+      app.ctx.restore();
     }
     if (selection) drawSel(selection.path, selection.rect, true);
     if (selectionPreview)
@@ -1767,38 +1849,38 @@
     const now = Date.now();
     for (const [id, c] of cursors) {
       if (now - c.ts > 3000) continue;
-      const x = (c.x - camera.x) * camera.scale;
-      const y = (c.y - camera.y) * camera.scale;
+      const x = (c.x - app.camera.x) * app.camera.scale;
+      const y = (c.y - app.camera.y) * app.camera.scale;
       const col = cursorsMeta.get(id)?.color || "#007aff";
       drawPeerCursor(x, y, col);
     }
   }
 
   function drawSel(path, rect, handles) {
-    ctx.save();
-    ctx.beginPath();
+    app.ctx.save();
+    app.ctx.beginPath();
     path.forEach((p, i) => {
-      const x = (p.x - camera.x) * camera.scale,
-        y = (p.y - camera.y) * camera.scale;
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
+      const x = (p.x - app.camera.x) * app.camera.scale,
+        y = (p.y - app.camera.y) * app.camera.scale;
+      if (i === 0) app.ctx.moveTo(x, y);
+      else app.ctx.lineTo(x, y);
     });
-    ctx.closePath();
-    ctx.save();
+    app.ctx.closePath();
+    app.ctx.save();
     const t = (Date.now() / 150) % 8;
-    ctx.translate(-t, -t);
-    ctx.fillStyle = selPattern;
-    ctx.fill();
-    ctx.restore();
-    ctx.strokeStyle = cursorColor;
-    ctx.setLineDash([8, 4]);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    app.ctx.translate(-t, -t);
+    app.ctx.fillStyle = selPattern || "rgba(0,0,0,0.08)";
+    app.ctx.fill();
+    app.ctx.restore();
+    app.ctx.strokeStyle = cursorColor;
+    app.ctx.setLineDash([8, 4]);
+    app.ctx.stroke();
+    app.ctx.setLineDash([]);
     if (handles) {
-      const x = (rect.x - camera.x) * camera.scale,
-        y = (rect.y - camera.y) * camera.scale,
-        w = rect.w * camera.scale,
-        h = rect.h * camera.scale;
+      const x = (rect.x - app.camera.x) * app.camera.scale,
+        y = (rect.y - app.camera.y) * app.camera.scale,
+        w = rect.w * app.camera.scale,
+        h = rect.h * app.camera.scale;
       const hs = 6;
       const corners = [
         [x, y],
@@ -1806,46 +1888,46 @@
         [x, y + h],
         [x + w, y + h],
       ];
-      ctx.fillStyle = "#fff";
-      ctx.strokeStyle = cursorColor;
+      app.ctx.fillStyle = "#fff";
+      app.ctx.strokeStyle = cursorColor;
       for (const [cx, cy] of corners) {
-        ctx.beginPath();
-        ctx.rect(cx - hs / 2, cy - hs / 2, hs, hs);
-        ctx.fill();
-        ctx.stroke();
+        app.ctx.beginPath();
+        app.ctx.rect(cx - hs / 2, cy - hs / 2, hs, hs);
+        app.ctx.fill();
+        app.ctx.stroke();
       }
     }
-    ctx.restore();
+    app.ctx.restore();
   }
 
   function drawPeerCursor(x, y, color) {
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate((-20 * Math.PI) / 180);
-    ctx.scale(1.5, 1.5);
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    ctx.fillStyle = color;
-    ctx.strokeStyle = color;
-    ctx.shadowColor = "rgba(0,0,0,0.2)";
-    ctx.shadowBlur = 2;
+    app.ctx.save();
+    app.ctx.translate(x, y);
+    app.ctx.rotate((-20 * Math.PI) / 180);
+    app.ctx.scale(1.5, 1.5);
+    app.ctx.lineJoin = "round";
+    app.ctx.lineCap = "round";
+    app.ctx.fillStyle = color;
+    app.ctx.strokeStyle = color;
+    app.ctx.shadowColor = "rgba(0,0,0,0.2)";
+    app.ctx.shadowBlur = 2;
     const r = 4;
-    ctx.beginPath();
+    app.ctx.beginPath();
     for (let i = 0; i < 5; i++) {
       const a = ((i * 72 - 90) * Math.PI) / 180;
       const x1 = Math.cos(a) * r;
       const y1 = Math.sin(a) * r;
-      ctx.lineTo(x1, y1);
+      app.ctx.lineTo(x1, y1);
       const a2 = a + (36 * Math.PI) / 180;
-      ctx.lineTo((Math.cos(a2) * r) / 2, (Math.sin(a2) * r) / 2);
+      app.ctx.lineTo((Math.cos(a2) * r) / 2, (Math.sin(a2) * r) / 2);
     }
-    ctx.closePath();
-    ctx.fill();
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(0, 10);
-    ctx.stroke();
-    ctx.restore();
+    app.ctx.closePath();
+    app.ctx.fill();
+    app.ctx.beginPath();
+    app.ctx.moveTo(0, 0);
+    app.ctx.lineTo(0, 10);
+    app.ctx.stroke();
+    app.ctx.restore();
   }
 
   // сетевые сообщения
@@ -1943,7 +2025,7 @@
     out.push(copy);
   }
   return {
-    bg: bgColor,
+    bg: app.bgColor,
     strokes: out,
     rev,
     deleted: [...deleted], // поддержка soft-delete
@@ -1953,7 +2035,7 @@
     try {
       let changed = false;
       if (state && typeof state.bg === "string") {
-        bgColor = state.bg;
+        app.bgColor = state.bg;
         drawGrid();
       }
       if (state && Array.isArray(state.strokes)) {
@@ -2009,15 +2091,9 @@
   }
 
   Object.assign(window, {
-    cvs,
-    grid,
     strokes,
     cache,
     myStack,
-    camera,
-    get DPR() {
-      return DPR;
-    },
     get meId() {
       return meId;
     },
