@@ -416,6 +416,7 @@
 <script src="net-webrtc.js"></script>
 <script type="module">
   import { exportEmbeddedPNG } from "./embed-png.js";
+  let DPR = 1;
   // ===== util =====
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -480,7 +481,6 @@
       mql.addListener(adjustBottomInset);
     }
   }
-  let DPR = Math.max(1, devicePixelRatio || 1);
   let camera = { x: 0, y: 0, scale: 1 };
 
   function resize() {
@@ -488,15 +488,16 @@
     // уменьшаем высоту сцены на мобильном на величину инсета
     const inset = isMobileUI() ? getStageInsetPx() : 0;
     const h = Math.max(0, innerHeight - inset);
-    DPR = Math.max(1, devicePixelRatio || 1);
+    const dpr = Math.max(1, devicePixelRatio || 1);
+    DPR = dpr;
     [grid, cvs].forEach((cn) => {
-      cn.width = w * DPR;
-      cn.height = h * DPR;
+      cn.width = w * dpr;
+      cn.height = h * dpr;
       cn.style.width = w + "px";
       cn.style.height = h + "px";
     });
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    gtx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    gtx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawGrid();
     requestRender();
   }
