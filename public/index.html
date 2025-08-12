@@ -1,9 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<meta
-  name="viewport"
-  content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
-/>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Realtime Canvas</title>
 <style>
   :root {
@@ -45,6 +42,7 @@
     border-radius: 10px;
     padding: 10px 12px;
     font-size: 16px;
+    touch-action: manipulation;
   }
   input[type="range"] {
     padding: 0;
@@ -174,31 +172,59 @@
   #toolbar small {
     color: var(--muted);
   }
-  #toolbar.mobile {
-    left: 50%;
-    top: auto;
-    bottom: 8px;
-    right: auto;
-    transform: translateX(-50%);
-    flex-wrap: wrap;
-    border-radius: 12px;
-    width: auto;
-    justify-content: center;
+  #latency-badge {
+    position: fixed;
+    top: env(safe-area-inset-top, 8px);
+    right: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font: 13px/1.2 system-ui, sans-serif;
+    z-index: 1000;
+    backdrop-filter: blur(6px);
   }
-  #toolbar.mobile .group {
-    flex-wrap: wrap;
-    justify-content: center;
+
+  @media (max-width: 768px), (pointer: coarse) {
+    #toolbar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: env(safe-area-inset-bottom, 0);
+      display: flex;
+      gap: 8px;
+      padding: 8px 10px 10px;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0),
+        rgba(0, 0, 0, 0.35)
+      );
+      z-index: 1001;
+    }
+    #toolbar button,
+    #toolbar .tool {
+      min-width: 44px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+    }
+    canvas {
+      block-size: auto;
+    }
+    .hint {
+      display: none;
+    }
   }
-  #toolbar.mobile button,
-  #toolbar.mobile .swatch,
-  #toolbar.mobile input[type="color"] {
-    width: 40px;
-    height: 40px;
-    font-size: 20px;
-    padding: 0;
-  }
-  #toolbar.mobile ~ .hint {
-    display: none;
+  /* Жесты и выделение — только нашими руками */
+  canvas {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .hint {
     position: fixed;
@@ -228,6 +254,8 @@
   <canvas id="grid"></canvas>
   <canvas id="cvs"></canvas>
 </div>
+
+<div id="latency-badge" aria-live="polite" hidden>— ms</div>
 
 <div id="toolbar">
   <div class="group">
@@ -344,12 +372,16 @@
     <label
       >Размер 24 <input class="hk" data-action="size24" value="9" size="2"
     /></label>
+    <label class="row">
+      <input type="checkbox" id="opt-latency" /> Показывать задержку сервера
+    </label>
   </div>
   <div class="row"><button id="settingsClose">Закрыть</button></div>
 </div>
 
 <script type="module" src="raster-import.js"></script>
 <script type="module" src="embed-png.js"></script>
+<script>window.schedulePull ||= function(){};</script>
 <script src="net-webrtc.js"></script>
 <script type="module">
   import { exportEmbeddedPNG } from "./embed-png.js";
@@ -364,6 +396,24 @@
     gtx = grid.getContext("2d");
   const cvs = $("#cvs"),
     ctx = cvs.getContext("2d");
+  cvs.addEventListener("dblclick", (e) => e.preventDefault(), { passive: false });
+  ["gesturestart", "gesturechange", "gestureend"].forEach((evt) =>
+    cvs.addEventListener(evt, (e) => e.preventDefault(), { passive: false }),
+  );
+  function adjustBottomInset() {
+    const tb = document.getElementById("toolbar");
+    if (!tb) return;
+    const h = tb.getBoundingClientRect().height;
+    document.body.style.paddingBottom = Math.ceil(h + 8) + "px";
+  }
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(adjustBottomInset).observe(document.getElementById("toolbar"));
+  } else {
+    addEventListener("resize", () => setTimeout(adjustBottomInset, 0));
+  }
+  adjustBottomInset();
+  addEventListener("orientationchange", () => setTimeout(adjustBottomInset, 200));
+  addEventListener("load", adjustBottomInset);
   let DPR = Math.max(1, devicePixelRatio || 1);
   let camera = { x: 0, y: 0, scale: 1 };
 
@@ -383,6 +433,11 @@
     requestRender();
   }
   addEventListener("resize", resize, { passive: true });
+
+  function setCompositeForTool(context, tool) {
+    context.globalCompositeOperation =
+      tool === "erase" ? "destination-out" : "source-over";
+  }
 
   let gridColor = "#cccccc";
   function drawGrid() {
@@ -413,6 +468,11 @@
   let roomId = null,
     meId = null; // мой peer id
   let rev = 0; // ревизия состояния (монотонно растёт)
+  window.rev = rev;
+  function setRev(v) {
+    rev = v | 0;
+    window.rev = rev;
+  }
   let mode = "draw";
   let brush = { color: "#000000", size: 6 };
   let bgColor = "#ffffff";
@@ -466,6 +526,8 @@
   const myStack = []; // ids моих штрихов (для undo)
   const redoStack = []; // ids для redo
   const rasterDirty = new Set();
+  const deleted = new Set();
+
 
   const patternCanvas = document.createElement("canvas");
   patternCanvas.width = 8;
@@ -489,8 +551,6 @@
   // ===== UI wiring =====
   const toolbar = $("#toolbar");
   const toolButtons = $$(".tool");
-  const isMobile = matchMedia("(pointer:coarse)").matches;
-  if (isMobile) toolbar.classList.add("mobile");
   function setTool(t) {
     mode = t;
     toolButtons.forEach((btn) =>
@@ -512,6 +572,31 @@
     if (!moreGroup.contains(e.target)) moreGroup.classList.remove("open");
   });
   $("#more-menu").onclick = () => moreGroup.classList.remove("open");
+
+  const optLatency = document.getElementById("opt-latency");
+  const latencyBadge = document.getElementById("latency-badge");
+  const LATENCY_KEY = "opt-latency";
+  optLatency.checked = JSON.parse(localStorage.getItem(LATENCY_KEY) || "false");
+  latencyBadge.hidden = !optLatency.checked;
+  optLatency.addEventListener("change", () => {
+    localStorage.setItem(LATENCY_KEY, optLatency.checked);
+    latencyBadge.hidden = !optLatency.checked;
+  });
+  let pingTimer = null;
+  function startPing() {
+    if (pingTimer) return;
+    pingTimer = setInterval(sendPing, 5000);
+  }
+  function stopPing() {
+    if (!pingTimer) return;
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+  function sendPing() {
+    if (!optLatency.checked) return;
+    const t = performance.now();
+    Net.pingServer(t);
+  }
 
   const imageLoader = $("#imageLoader");
 
@@ -718,7 +803,13 @@
   };
 
   function joinRoom(id) {
+    setRev(0);
     roomId = id;
+    lastPull = 0;
+    if (pullTimer) {
+      clearTimeout(pullTimer);
+      pullTimer = null;
+    }
     lobbyToStage();
     Net.connect(roomId, {
       onJoined: ({ me, roomId, peers }) => {
@@ -729,6 +820,7 @@
         setTimeout(() => {
           if (strokes.size === 0) loadLocal();
         }, 1000);
+        startPing();
       },
       onPeerOpen: (peerId) => {
         // попросить снапшот адресно и указать кто просит
@@ -743,6 +835,13 @@
         cursors.set(id, { x, y, drawing, ts: Date.now() });
         requestRender();
       },
+      onPong: (t) => {
+        if (latencyBadge.hidden) return;
+        const rtt = Math.max(0, Math.round(performance.now() - t));
+        const newText = rtt + " ms";
+        if (latencyBadge.textContent !== newText) latencyBadge.textContent = newText;
+      },
+      onClose: () => stopPing(),
     });
   }
   $("#join").onclick = () => joinRoom($("#room").value.trim() || "public-room");
@@ -752,6 +851,7 @@
     stage.style.display = "block";
     document.getElementById("toolbar").style.display = "flex";
     resize();
+    adjustBottomInset();
   }
 
   // ===== drawing =====
@@ -783,6 +883,7 @@
           strokes.delete(current.id);
           cache.delete(current.id);
           myStack.pop();
+          deleted.add(current.id);
           enqueue({ type: "del", id: current.id });
           requestRender();
         }
@@ -854,12 +955,13 @@
       id: genId(),
       by: meId,
       mode,
-      color: mode === "erase" ? "#000000" : brush.color,
+      color: mode === "erase" ? undefined : brush.color,
       size: brush.size,
       points: [w],
     };
     strokes.set(current.id, current);
     cache.set(current.id, current);
+    deleted.delete(current.id);
     myStack.push(current.id);
     redoStack.length = 0;
     enqueue({
@@ -867,6 +969,7 @@
       id: current.id,
       by: meId,
       mode: current.mode,
+      tool: current.mode,
       color: current.color,
       size: current.size,
       points: [w],
@@ -1005,6 +1108,7 @@
         id: current.id,
         by: meId,
         mode: current.mode,
+        tool: current.mode,
         color: current.color,
         size: current.size,
         points: [w],
@@ -1127,6 +1231,7 @@
     if (e.key === "Delete" && selection) {
       for (const id of selection.ids) {
         strokes.delete(id);
+        deleted.add(id);
         Net.sendReliable({ type: "del", id });
       }
       selection = null;
@@ -1519,9 +1624,8 @@
       ctx.save();
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
-      ctx.globalCompositeOperation =
-        s.mode === "erase" ? "destination-out" : "source-over";
-      ctx.strokeStyle = s.color;
+      setCompositeForTool(ctx, s.mode);
+      ctx.strokeStyle = s.mode === "erase" ? "#000000" : s.color;
       ctx.lineWidth = s.size * camera.scale;
       ctx.beginPath();
       s.points.forEach((p, i) => {
@@ -1634,13 +1738,14 @@
         s = {
           id: op.id,
           by: op.by,
-          mode: op.mode,
+          mode: op.mode || op.tool,
           color: op.color,
           size: op.size,
           points: [],
         };
         strokes.set(op.id, s);
         cache.set(op.id, s);
+        deleted.delete(op.id);
       }
       for (const p of op.points) s.points.push(p);
       requestRender();
@@ -1662,12 +1767,14 @@
       };
       strokes.set(op.id, s);
       cache.set(op.id, s);
+      deleted.delete(op.id);
       requestRender();
       debounceSave();
       return;
     }
     if (op.type === "del") {
       strokes.delete(op.id);
+      deleted.add(op.id);
       requestRender();
       debounceSave();
       return;
@@ -1677,6 +1784,7 @@
       if (s.mode === "image") loadImageForStroke(s);
       strokes.set(s.id, s);
       cache.set(s.id, s);
+      deleted.delete(s.id);
       requestRender();
       debounceSave();
       return;
@@ -1703,20 +1811,20 @@
   }
 
   function serializeState() {
-    const out = [];
-    for (const s of strokes.values()) {
-      const copy = { ...s };
-      delete copy._bbox;
-      delete copy._img;
-      out.push(copy);
-    }
-    // ВАЖНО: не инкрементим здесь — просто возвращаем текущее
-    return { bg: bgColor, strokes: out, rev };
+   const out = [];
+for (const s of strokes.values()) {
+  const copy = { ...s };
+  delete copy._bbox;
+  delete copy._img;
+  out.push(copy);
+}
+// ВАЖНО: не инкрементим здесь — просто возвращаем текущее
+return { bg: bgColor, strokes: out, rev };
+
   }
   function mergeState(state, opt = {}) {
     try {
       let changed = false;
-      const oldRev = rev | 0;
       if (state && typeof state.bg === "string") {
         bgColor = state.bg;
         drawGrid();
@@ -1729,6 +1837,7 @@
             if (s.mode === "image") loadImageForStroke(s);
             strokes.set(s.id, s);
             cache.set(s.id, s);
+            deleted.delete(s.id);
             changed = true;
           } else if (
             s.mode === "image" ||
@@ -1748,18 +1857,27 @@
             if (s.mode === "image") loadImageForStroke(s);
             strokes.set(s.id, s);
             cache.set(s.id, s);
+            deleted.delete(s.id);
             changed = true;
           }
         }
       }
+      if (state && Array.isArray(state.deleted)) {
+        for (const id of state.deleted) {
+          strokes.delete(id);
+          deleted.add(id);
+        }
+        if (state.deleted.length) changed = true;
+      }
       // поднять локальную ревизию до серверной/чужой
       const srvRev = state && typeof state.rev === "number" ? (state.rev | 0) : 0;
-      if (srvRev > rev) rev = srvRev;
+      if (srvRev > rev) setRev(srvRev);
       requestRender();
       // ВАЖНО:
       // - если это серверный state → НЕ сохраняем (чтобы не было петли)
       // - если это peer state_full (opt.fromServer=false) или локальное изменение → сохраняем
       if (!opt.fromServer && changed) debounceSave();
+      return changed;
     } catch (e) {}
   }
 
@@ -1790,6 +1908,7 @@
     if (!id) return;
     Net.sendReliable({ type: "del", id });
     strokes.delete(id);
+    deleted.add(id);
     redoStack.push(id);
     requestRender();
     debounceSave();
@@ -1800,6 +1919,7 @@
     const s = cache.get(id);
     if (!s) return;
     strokes.set(id, s);
+    deleted.delete(id);
     const payload = { ...s };
     if (payload._bbox) delete payload._bbox;
     Net.sendReliable({ type: "add", stroke: payload });
@@ -1825,11 +1945,18 @@
 
   function leaveRoom() {
     Net.disconnect();
+    stopPing();
+    setRev(0);
     roomId = null;
     strokes.clear();
     cache.clear();
     myStack.length = 0;
     redoStack.length = 0;
+    deleted.clear();
+    if (pullTimer) {
+      clearTimeout(pullTimer);
+      pullTimer = null;
+    }
     $("#stage").style.display = "none";
     $("#toolbar").style.display = "none";
     $("#lobby").style.display = "block";
@@ -1853,21 +1980,43 @@
   }
   let saveTimer = null;
   function debounceSave() {
-    if (saveTimer) return;
+    if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = null;
-      // инкремент до отправки
-      rev = (rev | 0) + 1;
+      setRev((rev | 0) + 1);
       saveLocal();
       Net.saveState(serializeState());
-    }, 300);
+    }, 700);
   }
+
+  let pullTimer = null,
+    lastPull = 0;
+  function schedulePull() {
+    if (pullTimer) return;
+    const now = Date.now();
+    const wait = Math.max(0, 500 - (now - lastPull));
+    pullTimer = setTimeout(() => {
+      pullTimer = null;
+      lastPull = Date.now();
+      try {
+        Net.requestState();
+      } catch {}
+    }, wait);
+  }
+  window.schedulePull = schedulePull;
 
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       // поднимем ревизию и сохраним
-      rev = (rev | 0) + 1;
+      setRev((rev | 0) + 1);
       Net.saveState(serializeState());
     }
+  });
+
+  window.addEventListener("beforeunload", () => {
+    try {
+      setRev((rev | 0) + 1);
+      Net.saveState(serializeState());
+    } catch {}
   });
 </script>
