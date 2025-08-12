@@ -417,6 +417,8 @@
 <script type="module">
   import { exportEmbeddedPNG } from "./embed-png.js";
   let DPR = 1;
+  // ===== early app state (должно быть объявлено ДО первого resize/drawGrid) =====
+  let bgColor = "#ffffff"; // дефолт фона для drawGrid на раннем старте
   // ===== util =====
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -512,7 +514,7 @@
   function drawGrid() {
     const w = grid.width / DPR,
       h = grid.height / DPR;
-    gtx.fillStyle = bgColor;
+    gtx.fillStyle = typeof bgColor === "string" ? bgColor : "#ffffff";
     gtx.fillRect(0, 0, w, h);
     const step = 100 * camera.scale;
     if (step > 24) {
@@ -544,7 +546,6 @@
   }
   let mode = "draw";
   let brush = { color: "#000000", size: 6 };
-  let bgColor = "#ffffff";
   let selection = null,
     selOp = null,
     selectionPreview = null;
