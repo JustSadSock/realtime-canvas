@@ -419,6 +419,8 @@
   let DPR = 1;
   // ===== early app state (должно быть объявлено ДО первого resize/drawGrid) =====
   let bgColor = "#ffffff"; // дефолт фона для drawGrid на раннем старте
+  let camera = { x: 0, y: 0, scale: 1 }; // камера нужна до первого drawGrid
+  let gridColor = "#cccccc"; // цвет сетки по умолчанию
   // ===== util =====
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -483,7 +485,6 @@
       mql.addListener(adjustBottomInset);
     }
   }
-  let camera = { x: 0, y: 0, scale: 1 };
 
   function resize() {
     const w = innerWidth;
@@ -510,7 +511,6 @@
       tool === "erase" ? "destination-out" : "source-over";
   }
 
-  let gridColor = "#cccccc";
   function drawGrid() {
     const w = grid.width / DPR,
       h = grid.height / DPR;
