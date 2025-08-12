@@ -379,11 +379,12 @@
   <div class="row"><button id="settingsClose">Закрыть</button></div>
 </div>
 
+<script type="module" src="raster-import.js"></script>
 <script type="module" src="embed-png.js"></script>
 <script>window.schedulePull ||= function(){};</script>
 <script src="net-webrtc.js"></script>
 <script type="module">
-  import { exportEmbeddedPNG, importPNG } from "./embed-png.js";
+  import { exportEmbeddedPNG } from "./embed-png.js";
   // ===== util =====
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
@@ -479,6 +480,7 @@
     selOp = null,
     selectionPreview = null;
   let cursorColor = "#007aff";
+  window.importActive = false;
   const defaultHotkeys = {
     draw: "1",
     erase: "2",
@@ -515,7 +517,7 @@
   loadSettings();
   function renderHint() {
     $("#hint").textContent =
-      `Кисть: ${hotkeys.draw} • Ластик: ${hotkeys.erase} • Выделение: ${hotkeys.select} • Заливка: ${hotkeys.fill} • Размер: ${hotkeys.size2}/${hotkeys.size6}/${hotkeys.size12}/${hotkeys.size24} • Колёсико: зум • Shift+колёсико: панорама • Средняя кнопка: перетаскивание`;
+      `Кисть: ${hotkeys.draw} • Ластик: ${hotkeys.erase} • Выделение: ${hotkeys.select} • Заливка: ${hotkeys.fill} • Размер: ${hotkeys.size2}/${hotkeys.size6}/${hotkeys.size12}/${hotkeys.size24} • Колёсико: зум • Shift+колёсико: панорама • Shift при импорте: фиксирует пропорции • Средняя кнопка: перетаскивание`;
   }
   renderHint();
 
@@ -523,7 +525,9 @@
   const cache = new Map(); // полный штрих (для redo/ресинка)
   const myStack = []; // ids моих штрихов (для undo)
   const redoStack = []; // ids для redo
+  const rasterDirty = new Set();
   const deleted = new Set();
+
 
   const patternCanvas = document.createElement("canvas");
   patternCanvas.width = 8;
@@ -659,16 +663,16 @@
   };
   imageLoader.onchange = async (e) => {
     const file = e.target.files[0];
-    if (file) await importPNG(file);
+    if (file) await window.beginImport(file);
     e.target.value = "";
   };
   document.addEventListener("paste", async (e) => {
     const item = [...(e.clipboardData?.items || [])].find(
-      (it) => it.type === "image/png",
+      (it) => it.type.startsWith("image/"),
     );
     if (item) {
       const file = item.getAsFile();
-      if (file) await importPNG(file);
+      if (file) await window.beginImport(file);
     }
   });
   cvs.addEventListener("dragover", (e) => {
@@ -677,7 +681,7 @@
   cvs.addEventListener("drop", async (e) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file) await importPNG(file);
+    if (file) await window.beginImport(file);
   });
   window.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -685,10 +689,11 @@
   window.addEventListener("drop", async (e) => {
     e.preventDefault();
     const f = e.dataTransfer.files[0];
-    if (f) await importPNG(f);
+    if (f) await window.beginImport(f);
   });
 
   document.addEventListener("keydown", (e) => {
+    if (window.importActive) return;
     if (e.target.tagName === "INPUT") return;
     const k = e.key;
     if (k === hotkeys.draw) setTool("draw");
@@ -1025,12 +1030,18 @@
         for (const id of selection.ids) {
           const o = selOp.orig.get(id);
           const s = strokes.get(id);
-          if (s.mode === "fill") {
-            s.points[0].x = o.points[0].x + dx;
-            s.points[0].y = o.points[0].y + dy;
-          } else if (s.mode === "image") {
+          if (s.mode === "image") {
             s.x = o.x + dx;
             s.y = o.y + dy;
+          } else if (s.mode === "raster") {
+            s.runs = o.runs.map((r) => {
+              const y = Math.round(r.y + dy);
+              const x0 = Math.round(r.x0 + dx);
+              const x1 = Math.round(r.x1 + dx);
+              return { y, x0, x1, color: r.color };
+            });
+            s.rowH = o.rowH ?? 1;
+            updateRasterBBox(s);
           } else {
             s.points = o.points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
           }
@@ -1053,8 +1064,8 @@
           h: Math.abs(y2 - y1),
         };
         selection.rect = rect;
-        const sx = rect.w / r.w,
-          sy = rect.h / r.h;
+        const sx = r.w ? rect.w / r.w : 1,
+          sy = r.h ? rect.h / r.h : 1;
         const ox = r.x,
           oy = r.y;
         selection.path = selOp.path.map((p) => ({
@@ -1064,15 +1075,20 @@
         for (const id of selection.ids) {
           const o = selOp.orig.get(id);
           const s = strokes.get(id);
-          if (s.mode === "fill") {
-            const p = o.points[0];
-            s.points[0].x = rect.x + (p.x - ox) * sx;
-            s.points[0].y = rect.y + (p.y - oy) * sy;
-          } else if (s.mode === "image") {
+          if (s.mode === "image") {
             s.x = rect.x + (o.x - ox) * sx;
             s.y = rect.y + (o.y - oy) * sy;
             s.w = o.w * sx;
             s.h = o.h * sy;
+          } else if (s.mode === "raster") {
+            s.runs = o.runs.map((r) => {
+              const y = Math.round(rect.y + (r.y - oy) * sy);
+              const x0 = Math.round(rect.x + (r.x0 - ox) * sx);
+              const x1 = Math.round(rect.x + (r.x1 - ox) * sx);
+              return { y, x0, x1, color: r.color };
+            });
+            s.rowH = (o.rowH ?? 1) * sy;
+            updateRasterBBox(s);
           } else {
             s.points = o.points.map((p) => ({
               x: rect.x + (p.x - ox) * sx,
@@ -1098,6 +1114,23 @@
         points: [w],
       });
       requestRender();
+    }
+    if (mode === "erase" && isDown) {
+      const rad = brush.size / 2;
+      let changed = false;
+      for (const [id, s] of strokes) {
+        if (s === current) continue;
+        if (s.mode === "raster") {
+          if (!s._bbox) updateRasterBBox(s);
+          if (!circleIntersectsBBox(w.x, w.y, rad, s._bbox)) continue;
+          eraseRasterStroke(s, w.x, w.y, rad);
+          rasterDirty.add(s.id);
+          changed = true;
+        }
+      }
+      if (changed) {
+        requestRender();
+      }
     }
     Net.sendCursor({ x: w.x, y: w.y, drawing: isDown });
   });
@@ -1130,6 +1163,7 @@
             const s = strokes.get(id);
             Net.sendReliable({ type: "del", id });
             const payload = { ...s };
+            if (payload._bbox) delete payload._bbox;
             Net.sendReliable({ type: "add", stroke: payload });
           }
       }
@@ -1141,6 +1175,25 @@
       return;
     }
     current = null;
+    if (rasterDirty.size) {
+      const ops = [];
+      for (const id of rasterDirty) {
+        const s = strokes.get(id);
+        if (!s) continue;
+        compactRuns(s);
+        ops.push({ type: "del", id });
+        if (s.runs.length) {
+          const payload = { ...s };
+          if (payload._bbox) delete payload._bbox;
+          ops.push({ type: "add", stroke: payload });
+        } else {
+          strokes.delete(id);
+        }
+      }
+      Net.sendReliable({ type: "batch", ops });
+      rasterDirty.clear();
+      debounceSave();
+    }
   });
 
   cvs.addEventListener("pointercancel", (e) => {
@@ -1174,6 +1227,7 @@
   );
 
   addEventListener("keydown", (e) => {
+    if (window.importActive) return;
     if (e.key === "Delete" && selection) {
       for (const id of selection.ids) {
         strokes.delete(id);
@@ -1252,6 +1306,40 @@
     }
     return inside;
   }
+  function polyIntersectsRect(poly, rx, ry, rw, rh) {
+    const pb = bboxOfPoints(poly);
+    if (pb.x > rx + rw || pb.x + pb.w < rx || pb.y > ry + rh || pb.y + pb.h < ry)
+      return false;
+    const rectPts = [
+      { x: rx, y: ry },
+      { x: rx + rw, y: ry },
+      { x: rx, y: ry + rh },
+      { x: rx + rw, y: ry + rh },
+    ];
+    if (rectPts.some((p) => pointInPoly(p, poly))) return true;
+    const inRect = (p) => p.x >= rx && p.x <= rx + rw && p.y >= ry && p.y <= ry + rh;
+    if (poly.some(inRect)) return true;
+    const segInt = (a, b, c, d) => {
+      const s1x = b.x - a.x,
+        s1y = b.y - a.y,
+        s2x = d.x - c.x,
+        s2y = d.y - c.y;
+      const s = (-s1y * (a.x - c.x) + s1x * (a.y - c.y)) / (-s2x * s1y + s1x * s2y);
+      const t = (s2x * (a.y - c.y) - s2y * (a.x - c.x)) / (-s2x * s1y + s1x * s2y);
+      return s >= 0 && s <= 1 && t >= 0 && t <= 1;
+    };
+    const rectEdges = [
+      [rectPts[0], rectPts[1]],
+      [rectPts[1], rectPts[3]],
+      [rectPts[3], rectPts[2]],
+      [rectPts[2], rectPts[0]],
+    ];
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const e1 = [poly[j], poly[i]];
+      if (rectEdges.some((e2) => segInt(e1[0], e1[1], e2[0], e2[1]))) return true;
+    }
+    return false;
+  }
   function strokeIntersectsPoly(s, poly) {
     if (s.mode === "image") {
       const pts = [
@@ -1262,23 +1350,29 @@
       ];
       return pts.some((pt) => pointInPoly(pt, poly));
     }
-    if (s.mode === "fill") {
-      return pointInPoly(s.points[0], poly);
+    if (s.mode === "raster") {
+      if (!s.runs.length) return false;
+      if (!s._bbox) updateRasterBBox(s);
+      const { x, y, w, h } = s._bbox;
+      return polyIntersectsRect(poly, x, y, w, h);
     }
     return s.points.some((pt) => pointInPoly(pt, poly));
   }
   function cloneStroke(s) {
-    return s.mode === "image"
-      ? { ...s }
-      : { ...s, points: s.points.map((p) => ({ ...p })) };
+    if (s.mode === "image") return { ...s };
+    if (s.mode === "raster")
+      return { ...s, runs: s.runs.map((r) => ({ ...r })) };
+    return { ...s, points: s.points.map((p) => ({ ...p })) };
   }
   function bboxOfStroke(s) {
-    if (s.mode === "fill") {
-      const p = s.points[0];
-      return { x: p.x - 1, y: p.y - 1, w: 2, h: 2 };
-    }
     if (s.mode === "image") {
       return { x: s.x, y: s.y, w: s.w, h: s.h };
+    }
+    if (s.mode === "raster") {
+      if (s._bbox) return { ...s._bbox };
+      if (!s.runs.length) return { x: 0, y: 0, w: 0, h: 0 };
+      updateRasterBBox(s);
+      return { ...s._bbox };
     }
     let minX = Infinity,
       minY = Infinity,
@@ -1296,102 +1390,75 @@
     const n = parseInt(hex.slice(1), 16);
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   }
-  function applyFillStroke(s) {
-    const w = cvs.width,
-      h = cvs.height;
-    const x = Math.round((s.points[0].x - camera.x) * camera.scale * DPR);
-    const y = Math.round((s.points[0].y - camera.y) * camera.scale * DPR);
-    if (x < 0 || y < 0 || x >= w || y >= h) return;
-    const img = ctx.getImageData(0, 0, w, h);
-    const data = img.data;
-    const idx = (y * w + x) * 4;
-    const target = [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
-    const fill = hexToRgb(s.color);
-    if (
-      target[0] === fill[0] &&
-      target[1] === fill[1] &&
-      target[2] === fill[2] &&
-      target[3] === 255
-    )
-      return;
-    const stack = [[x, y]];
-    const match = (i) =>
-      data[i] === target[0] &&
-      data[i + 1] === target[1] &&
-      data[i + 2] === target[2] &&
-      data[i + 3] === target[3];
-    while (stack.length) {
-      const [cx, cy] = stack.pop();
-      const i = (cy * w + cx) * 4;
-      if (!match(i)) continue;
-      data[i] = fill[0];
-      data[i + 1] = fill[1];
-      data[i + 2] = fill[2];
-      data[i + 3] = 255;
-      if (cx > 0) stack.push([cx - 1, cy]);
-      if (cx < w - 1) stack.push([cx + 1, cy]);
-      if (cy > 0) stack.push([cx, cy - 1]);
-      if (cy < h - 1) stack.push([cx, cy + 1]);
+
+  function eraseRasterStroke(s, cx, cy, rad) {
+    const out = [];
+    const r2 = rad * rad;
+    const rh = s.rowH ?? 1;
+    for (const run of s.runs) {
+      const top = run.y;
+      const bottom = run.y + rh;
+      let dy = 0;
+      if (cy < top) dy = top - cy;
+      else if (cy > bottom) dy = cy - bottom;
+      if (dy > rad) {
+        out.push(run);
+        continue;
+      }
+      const dx = Math.sqrt(r2 - dy * dy);
+      const cutL = Math.floor(cx - dx);
+      const cutR = Math.ceil(cx + dx);
+      if (run.x1 < cutL || run.x0 > cutR) {
+        out.push(run);
+        continue;
+      }
+      if (run.x0 < cutL) {
+        const l = { y: run.y, x0: run.x0, x1: cutL - 1, color: run.color };
+        if (l.x0 <= l.x1) out.push(l);
+      }
+      if (run.x1 > cutR) {
+        const r = { y: run.y, x0: cutR + 1, x1: run.x1, color: run.color };
+        if (r.x0 <= r.x1) out.push(r);
+      }
     }
-    ctx.putImageData(img, 0, 0);
+    s.runs = out;
   }
 
-  function rasterToStrokes(imgCanvas) {
-    const { width, height } = imgCanvas;
-    const ix = imgCanvas.getContext("2d").getImageData(0, 0, width, height);
-    const data = ix.data;
-    const quant = (v) => ((v / 16) | 0) * 16;
-    const out = [];
-    const MAX = 50000;
-    let stepY = 2;
-    let idn = 0;
-    while (true) {
-      out.length = 0;
-      const lineSize = (stepY + 1) / (camera.scale * DPR);
-      for (let y = 0; y < height; y += stepY) {
-        let x = 0;
-        while (x < width) {
-          const i = (y * width + x) * 4;
-          const a = data[i + 3];
-          if (a < 8) {
-            x++;
-            continue;
-          }
-          const r = quant(data[i]),
-            g = quant(data[i + 1]),
-            b = quant(data[i + 2]);
-          let x0 = x,
-            x1 = x;
-          for (let xx = x + 1; xx < width; xx++) {
-            const j = (y * width + xx) * 4;
-            const aa = data[j + 3];
-            const rr = quant(data[j]),
-              gg = quant(data[j + 1]),
-              bb = quant(data[j + 2]);
-            if (aa < 8 || rr !== r || gg !== g || bb !== b) break;
-            x1 = xx;
-          }
-          if (x1 > x0) {
-            const p0 = screenToWorld(x0 / DPR, y / DPR);
-            const p1 = screenToWorld(x1 / DPR, y / DPR);
-            out.push({
-              id: `fill-${Date.now()}-${idn++}`,
-              by: meId,
-              mode: "draw",
-              color: `rgb(${r},${g},${b})`,
-              size: lineSize,
-              points: [p0, p1],
-            });
-            if (out.length > MAX) break;
-          }
-          x = x1 + 1;
-        }
-        if (out.length > MAX) break;
-      }
-      if (out.length <= MAX || stepY > 16) break;
-      stepY *= 2;
+  function updateRasterBBox(s) {
+    const rh = s.rowH ?? 1;
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    for (const r of s.runs) {
+      if (r.x0 < minX) minX = r.x0;
+      if (r.y < minY) minY = r.y;
+      if (r.x1 > maxX) maxX = r.x1;
+      if (r.y + rh > maxY) maxY = r.y + rh;
     }
-    return out;
+    s._bbox =
+      minX === Infinity
+        ? { x: 0, y: 0, w: 0, h: 0 }
+        : { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY };
+  }
+
+  function circleIntersectsBBox(cx, cy, r, b) {
+    const dx = Math.max(b.x - cx, 0, cx - (b.x + b.w));
+    const dy = Math.max(b.y - cy, 0, cy - (b.y + b.h));
+    return dx * dx + dy * dy <= r * r;
+  }
+
+  function compactRuns(s) {
+    s.runs.sort((a, b) => a.y - b.y || a.x0 - b.x0);
+    const out = [];
+    for (const r of s.runs) {
+      const last = out[out.length - 1];
+      if (last && last.y === r.y && last.color === r.color && last.x1 >= r.x0 - 1) {
+        if (r.x1 > last.x1) last.x1 = r.x1;
+      } else out.push(r);
+    }
+    s.runs = out;
+    updateRasterBBox(s);
   }
 
   function performFill(w) {
@@ -1456,12 +1523,16 @@
       }
     }
     ox.putImageData(outImg, 0, 0);
-    const strokesVec = rasterToStrokes(off);
-    mergeState({ strokes: strokesVec });
-    for (const s of strokesVec) {
-      myStack.push(s.id);
-      Net.sendReliable({ type: "add", stroke: { ...s } });
-    }
+    const stroke = window.vectorizeToRasterRuns(off, {
+      x: camera.x,
+      y: camera.y,
+      scale: 1 / (camera.scale * DPR),
+    });
+    mergeState({ strokes: [stroke] });
+    myStack.push(stroke.id);
+    const payload = { ...stroke };
+    if (payload._bbox) delete payload._bbox;
+    Net.sendReliable({ type: "add", stroke: payload });
     requestRender();
     debounceSave();
   }
@@ -1503,16 +1574,14 @@
   }
   loop();
   function draw() {
-    const w = cvs.width / DPR,
-      h = cvs.height / DPR;
-    ctx.clearRect(0, 0, w, h);
+    const vw = cvs.width / DPR,
+      vh = cvs.height / DPR;
+    ctx.clearRect(0, 0, vw, vh);
     for (const s of strokes.values()) {
-      if (s.mode === "fill") {
-        applyFillStroke(s);
-        continue;
-      }
       if (s.mode === "image") {
-        if (s._img)
+        if (s._img) {
+          const prevSmooth = ctx.imageSmoothingEnabled;
+          ctx.imageSmoothingEnabled = false;
           ctx.drawImage(
             s._img,
             (s.x - camera.x) * camera.scale,
@@ -1520,6 +1589,36 @@
             s.w * camera.scale,
             s.h * camera.scale,
           );
+          ctx.imageSmoothingEnabled = prevSmooth;
+        }
+        continue;
+      }
+      if (s.mode === "raster") {
+        if (!s._bbox) updateRasterBBox(s);
+        const scale = camera.scale;
+        const vx1 = vw,
+          vy1 = vh;
+        const bx0 = (s._bbox.x - camera.x) * scale;
+        const by0 = (s._bbox.y - camera.y) * scale;
+        const bx1 = (s._bbox.x + s._bbox.w - camera.x) * scale;
+        const by1 = (s._bbox.y + s._bbox.h - camera.y) * scale;
+        if (bx1 < 0 || bx0 > vx1 || by1 < 0 || by0 > vy1) continue;
+        let last = "";
+        for (const r of s.runs) {
+          if (r.color !== last) {
+            ctx.fillStyle = r.color;
+            last = r.color;
+          }
+          // левая/верхняя границы — floor; правая/нижняя — ceil с учётом включительного конца
+          const x0p = Math.floor((r.x0 - camera.x) * scale);
+          const x1p = Math.ceil((r.x1 + 1 - camera.x) * scale);
+          const y0p = Math.floor((r.y - camera.y) * scale);
+          const y1p = Math.ceil((r.y + (s.rowH ?? 1) - camera.y) * scale);
+          if (x1p < 0 || x0p > vx1 || y1p < 0 || y0p > vy1) continue;
+          const rw = Math.max(1, x1p - x0p);
+          const rh = Math.max(1, y1p - y0p);
+          ctx.fillRect(x0p, y0p, rw, rh);
+        }
         continue;
       }
       ctx.save();
@@ -1712,8 +1811,16 @@
   }
 
   function serializeState() {
-    // ВАЖНО: не инкрементим здесь — просто возвращаем текущее
-    return { bg: bgColor, strokes: Array.from(strokes.values()), rev, deleted: [...deleted] };
+   const out = [];
+for (const s of strokes.values()) {
+  const copy = { ...s };
+  delete copy._bbox;
+  delete copy._img;
+  out.push(copy);
+}
+// ВАЖНО: не инкрементим здесь — просто возвращаем текущее
+return { bg: bgColor, strokes: out, rev };
+
   }
   function mergeState(state, opt = {}) {
     try {
@@ -1724,6 +1831,7 @@
       }
       if (state && Array.isArray(state.strokes)) {
         for (const s of state.strokes) {
+          if (s.mode === "raster") compactRuns(s);
           const had = strokes.get(s.id);
           if (!had) {
             if (s.mode === "image") loadImageForStroke(s);
@@ -1731,7 +1839,21 @@
             cache.set(s.id, s);
             deleted.delete(s.id);
             changed = true;
-          } else if ((had.points?.length || 0) < (s.points?.length || 0)) {
+          } else if (
+            s.mode === "image" ||
+            s.mode === "raster" ||
+            (had.points?.length || 0) < (s.points?.length || 0)
+          ) {
+            if (s.mode === "image" && had.mode === "image") {
+              const sigHad = `${had.w}x${had.h}:${had.src?.length || 0}`;
+              const sigNew = `${s.w}x${s.h}:${s.src?.length || 0}`;
+              if (sigHad === sigNew) continue;
+            }
+            if (s.mode === "raster" && had.mode === "raster") {
+              const sigHad = `${had.runs.length}:${had.rowH ?? 1}`;
+              const sigNew = `${s.runs.length}:${s.rowH ?? 1}`;
+              if (sigHad === sigNew) continue;
+            }
             if (s.mode === "image") loadImageForStroke(s);
             strokes.set(s.id, s);
             cache.set(s.id, s);
@@ -1776,6 +1898,8 @@
     mergeState,
     screenToWorld,
     requestRender,
+    debounceSave,
+    genId,
   });
 
   // undo/redo
@@ -1797,6 +1921,7 @@
     strokes.set(id, s);
     deleted.delete(id);
     const payload = { ...s };
+    if (payload._bbox) delete payload._bbox;
     Net.sendReliable({ type: "add", stroke: payload });
     myStack.push(id);
     requestRender();
