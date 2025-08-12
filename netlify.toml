@@ -1,9 +1,3 @@
 [build]
   publish = "public"
   command = ""
-
-# необязательно, но удобно — чтобы config.json всегда свежий
-[[headers]]
-  for = "/config.json"
-  [headers.values]
-    Cache-Control = "no-store, no-cache, must-revalidate, max-age=0"

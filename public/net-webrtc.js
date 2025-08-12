@@ -23,13 +23,17 @@
 
   // загружаем config.json (без кэша)
   fetch("config.json", { cache: "no-store" })
-    .then((r) => (r.ok ? r.json() : {}))
+    .then((r) => {
+      if (!r.ok) throw new Error(`config.json HTTP ${r.status}`);
+      return r.json();
+    })
     .then((j) => {
+      console.info("[signal] config.json =", j);
       if (j && j.SIGNAL_URL) cfg.SIGNAL_URL = j.SIGNAL_URL;
       cfg.ICE_SERVERS = Array.isArray(j?.ICE_SERVERS) && j.ICE_SERVERS.length ? j.ICE_SERVERS : defaultIce;
       if (Array.isArray(j?.TURN) && j.TURN.length) cfg.ICE_SERVERS = [...cfg.ICE_SERVERS, ...j.TURN];
     })
-    .catch(() => { /* оставим дефолт */ });
+    .catch((e) => console.error("[signal] failed to read config.json:", e));
 
   // ===== Внутреннее состояние =====
   let sws = null;            // WebSocket к сигналингу
@@ -68,7 +72,7 @@
 
   // ===== Реализация =====
 
-  function connect(targetRoomId, h = {}) {
+  function connect(targetRoomId, h = {}, signalUrl) {
     handlers = {
       onJoined: h.onJoined || noop,
       onPeerOpen: h.onPeerOpen || noop,
@@ -85,9 +89,12 @@
       sws = null;
     }
 
-    sws = new WebSocket(cfg.SIGNAL_URL);
+    const url = typeof signalUrl === "string" ? signalUrl : cfg.SIGNAL_URL;
+    let opened = false;
+    sws = new WebSocket(url);
     sws.onopen = () => {
-      log("ws open", cfg.SIGNAL_URL);
+      opened = true;
+      log("ws open", url);
       wsSend({ type: "join", roomId });
     };
     sws.onclose = (e) => {
@@ -99,7 +106,14 @@
         handlers.onClose(e);
       } catch {}
     };
-    sws.onerror = (e) => log("ws error", e?.message || e);
+    sws.onerror = (e) => {
+      log("ws error", e?.message || e);
+      if (!opened) {
+        try {
+          alert("Подключение к сигнал-серверу не удалось. Проверьте CSP и что URL начинается с wss://");
+        } catch {}
+      }
+    };
 
     sws.onmessage = (e) => {
       let m = null;
