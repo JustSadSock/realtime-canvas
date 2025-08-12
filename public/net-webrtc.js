@@ -62,6 +62,7 @@
     requestState,
     saveState,
     disconnect,
+    pingServer,
   };
   window.Net = Net;
 
@@ -74,6 +75,8 @@
       onState: h.onState || noop,
       onMsg: h.onMsg || noop,
       onCursor: h.onCursor || noop,
+      onClose: h.onClose || noop,
+      onPong: h.onPong || noop,
     };
     roomId = String(targetRoomId || "public-room");
 
@@ -92,6 +95,9 @@
       // мягко закроем всех пиров
       for (const [id, p] of peers) closePeer(id, p);
       peers.clear();
+      try {
+        handlers.onClose(e);
+      } catch {}
     };
     sws.onerror = (e) => log("ws error", e?.message || e);
 
@@ -143,6 +149,10 @@
         routeOpFromPeer(m.from, op);
         return;
       }
+      if (m.type === "app_pong") {
+        handlers.onPong(m.t);
+        return;
+      }
       if (m.type === "signal") {
         const from = m.from;
         const payload = m.payload || {};
@@ -177,6 +187,10 @@
     peers.clear();
     roomId = null;
     meId = null;
+  }
+
+  function pingServer(t) {
+    wsSend({ type: "app_ping", t });
   }
 
   function requestState() {

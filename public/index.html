@@ -1,9 +1,6 @@
 <!doctype html>
 <meta charset="utf-8" />
-<meta
-  name="viewport"
-  content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
-/>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Realtime Canvas</title>
 <style>
   :root {
@@ -45,6 +42,7 @@
     border-radius: 10px;
     padding: 10px 12px;
     font-size: 16px;
+    touch-action: manipulation;
   }
   input[type="range"] {
     padding: 0;
@@ -174,31 +172,59 @@
   #toolbar small {
     color: var(--muted);
   }
-  #toolbar.mobile {
-    left: 50%;
-    top: auto;
-    bottom: 8px;
-    right: auto;
-    transform: translateX(-50%);
-    flex-wrap: wrap;
-    border-radius: 12px;
-    width: auto;
-    justify-content: center;
+  #latency-badge {
+    position: fixed;
+    top: env(safe-area-inset-top, 8px);
+    right: 8px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font: 13px/1.2 system-ui, sans-serif;
+    z-index: 1000;
+    backdrop-filter: blur(6px);
   }
-  #toolbar.mobile .group {
-    flex-wrap: wrap;
-    justify-content: center;
+
+  @media (max-width: 768px), (pointer: coarse) {
+    #toolbar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: env(safe-area-inset-bottom, 0);
+      display: flex;
+      gap: 8px;
+      padding: 8px 10px 10px;
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+      background: linear-gradient(
+        180deg,
+        rgba(0, 0, 0, 0),
+        rgba(0, 0, 0, 0.35)
+      );
+      z-index: 1001;
+    }
+    #toolbar button,
+    #toolbar .tool {
+      min-width: 44px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+    }
+    canvas {
+      block-size: auto;
+    }
+    .hint {
+      display: none;
+    }
   }
-  #toolbar.mobile button,
-  #toolbar.mobile .swatch,
-  #toolbar.mobile input[type="color"] {
-    width: 40px;
-    height: 40px;
-    font-size: 20px;
-    padding: 0;
-  }
-  #toolbar.mobile ~ .hint {
-    display: none;
+  /* Жесты и выделение — только нашими руками */
+  canvas {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .hint {
     position: fixed;
@@ -228,6 +254,8 @@
   <canvas id="grid"></canvas>
   <canvas id="cvs"></canvas>
 </div>
+
+<div id="latency-badge" aria-live="polite" hidden>— ms</div>
 
 <div id="toolbar">
   <div class="group">
@@ -344,6 +372,9 @@
     <label
       >Размер 24 <input class="hk" data-action="size24" value="9" size="2"
     /></label>
+    <label class="row">
+      <input type="checkbox" id="opt-latency" /> Показывать задержку сервера
+    </label>
   </div>
   <div class="row"><button id="settingsClose">Закрыть</button></div>
 </div>
@@ -364,6 +395,24 @@
     gtx = grid.getContext("2d");
   const cvs = $("#cvs"),
     ctx = cvs.getContext("2d");
+  cvs.addEventListener("dblclick", (e) => e.preventDefault(), { passive: false });
+  ["gesturestart", "gesturechange", "gestureend"].forEach((evt) =>
+    cvs.addEventListener(evt, (e) => e.preventDefault(), { passive: false }),
+  );
+  function adjustBottomInset() {
+    const tb = document.getElementById("toolbar");
+    if (!tb) return;
+    const h = tb.getBoundingClientRect().height;
+    document.body.style.paddingBottom = Math.ceil(h + 8) + "px";
+  }
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(adjustBottomInset).observe(document.getElementById("toolbar"));
+  } else {
+    addEventListener("resize", () => setTimeout(adjustBottomInset, 0));
+  }
+  adjustBottomInset();
+  addEventListener("orientationchange", () => setTimeout(adjustBottomInset, 200));
+  addEventListener("load", adjustBottomInset);
   let DPR = Math.max(1, devicePixelRatio || 1);
   let camera = { x: 0, y: 0, scale: 1 };
 
@@ -383,6 +432,11 @@
     requestRender();
   }
   addEventListener("resize", resize, { passive: true });
+
+  function setCompositeForTool(context, tool) {
+    context.globalCompositeOperation =
+      tool === "erase" ? "destination-out" : "source-over";
+  }
 
   let gridColor = "#cccccc";
   function drawGrid() {
@@ -493,8 +547,6 @@
   // ===== UI wiring =====
   const toolbar = $("#toolbar");
   const toolButtons = $$(".tool");
-  const isMobile = matchMedia("(pointer:coarse)").matches;
-  if (isMobile) toolbar.classList.add("mobile");
   function setTool(t) {
     mode = t;
     toolButtons.forEach((btn) =>
@@ -516,6 +568,31 @@
     if (!moreGroup.contains(e.target)) moreGroup.classList.remove("open");
   });
   $("#more-menu").onclick = () => moreGroup.classList.remove("open");
+
+  const optLatency = document.getElementById("opt-latency");
+  const latencyBadge = document.getElementById("latency-badge");
+  const LATENCY_KEY = "opt-latency";
+  optLatency.checked = JSON.parse(localStorage.getItem(LATENCY_KEY) || "false");
+  latencyBadge.hidden = !optLatency.checked;
+  optLatency.addEventListener("change", () => {
+    localStorage.setItem(LATENCY_KEY, optLatency.checked);
+    latencyBadge.hidden = !optLatency.checked;
+  });
+  let pingTimer = null;
+  function startPing() {
+    if (pingTimer) return;
+    pingTimer = setInterval(sendPing, 5000);
+  }
+  function stopPing() {
+    if (!pingTimer) return;
+    clearInterval(pingTimer);
+    pingTimer = null;
+  }
+  function sendPing() {
+    if (!optLatency.checked) return;
+    const t = performance.now();
+    Net.pingServer(t);
+  }
 
   const imageLoader = $("#imageLoader");
 
@@ -738,6 +815,7 @@
         setTimeout(() => {
           if (strokes.size === 0) loadLocal();
         }, 1000);
+        startPing();
       },
       onPeerOpen: (peerId) => {
         // попросить снапшот адресно и указать кто просит
@@ -752,6 +830,13 @@
         cursors.set(id, { x, y, drawing, ts: Date.now() });
         requestRender();
       },
+      onPong: (t) => {
+        if (latencyBadge.hidden) return;
+        const rtt = Math.max(0, Math.round(performance.now() - t));
+        const newText = rtt + " ms";
+        if (latencyBadge.textContent !== newText) latencyBadge.textContent = newText;
+      },
+      onClose: () => stopPing(),
     });
   }
   $("#join").onclick = () => joinRoom($("#room").value.trim() || "public-room");
@@ -761,6 +846,7 @@
     stage.style.display = "block";
     document.getElementById("toolbar").style.display = "flex";
     resize();
+    adjustBottomInset();
   }
 
   // ===== drawing =====
@@ -864,7 +950,7 @@
       id: genId(),
       by: meId,
       mode,
-      color: mode === "erase" ? "#000000" : brush.color,
+      color: mode === "erase" ? undefined : brush.color,
       size: brush.size,
       points: [w],
     };
@@ -878,6 +964,7 @@
       id: current.id,
       by: meId,
       mode: current.mode,
+      tool: current.mode,
       color: current.color,
       size: current.size,
       points: [w],
@@ -1005,6 +1092,7 @@
         id: current.id,
         by: meId,
         mode: current.mode,
+        tool: current.mode,
         color: current.color,
         size: current.size,
         points: [w],
@@ -1437,9 +1525,8 @@
       ctx.save();
       ctx.lineJoin = "round";
       ctx.lineCap = "round";
-      ctx.globalCompositeOperation =
-        s.mode === "erase" ? "destination-out" : "source-over";
-      ctx.strokeStyle = s.color;
+      setCompositeForTool(ctx, s.mode);
+      ctx.strokeStyle = s.mode === "erase" ? "#000000" : s.color;
       ctx.lineWidth = s.size * camera.scale;
       ctx.beginPath();
       s.points.forEach((p, i) => {
@@ -1552,7 +1639,7 @@
         s = {
           id: op.id,
           by: op.by,
-          mode: op.mode,
+          mode: op.mode || op.tool,
           color: op.color,
           size: op.size,
           points: [],
@@ -1733,6 +1820,7 @@
 
   function leaveRoom() {
     Net.disconnect();
+    stopPing();
     setRev(0);
     roomId = null;
     strokes.clear();
