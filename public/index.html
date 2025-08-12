@@ -5,6 +5,7 @@
 <style>
   :root {
     --bg: #fff9fb;
+    --stage-bottom-inset: 0px; /* динамический отступ снизу для канваса */
     --fg: #222;
     --border: #e0cfe4;
     --panel: #ffffffcc;
@@ -111,32 +112,22 @@
   #grid {
     position: absolute;
     inset: 0;
+    bottom: var(--stage-bottom-inset, 0px); /* двигаем низ сетки */
     pointer-events: none;
   }
   #cvs {
     position: absolute;
     inset: 0;
+    bottom: var(--stage-bottom-inset, 0px); /* двигаем низ холста */
     touch-action: none;
   }
+  /* Скрыт по умолчанию, чтобы не мешать лобби */
   #toolbar {
-    position: fixed;
-    left: 0;
-    right: 0;
-    top: 0;
     display: none;
-    gap: 8px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 0 0 12px 12px;
-    padding: 8px;
-    backdrop-filter: blur(6px);
-    align-items: center;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-    justify-content: space-between;
   }
   #toolbar .group {
     display: flex;
-    gap: 6px;
+    gap: 8px;
     align-items: center;
   }
   #toolbar .dropdown {
@@ -180,28 +171,61 @@
     border-radius: 8px;
     background: rgba(0, 0, 0, 0.55);
     color: #fff;
-    font: 13px/1.2 system-ui, sans-serif;
-    z-index: 1000;
+    font:
+      13px/1.2 system-ui,
+      sans-serif;
+    z-index: 1100; /* выше тулбара на десктопе */
     backdrop-filter: blur(6px);
   }
 
+  /* Desktop: top full-width, одна строка */
+  @media (min-width: 769px) and (pointer: fine) {
+    #toolbar {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      right: 8px;
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+      padding: 8px 10px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+      z-index: 1001;
+    }
+  }
+
+  /* Mobile: bottom full-width, перенос в 2 строки при нехватке места */
   @media (max-width: 768px), (pointer: coarse) {
     #toolbar {
       position: fixed;
       left: 0;
       right: 0;
-      bottom: env(safe-area-inset-bottom, 0);
+      bottom: calc(env(safe-area-inset-bottom, 0) + 8px);
       display: flex;
-      gap: 8px;
-      padding: 8px 10px 10px;
-      overflow-x: auto;
-      overscroll-behavior-x: contain;
-      background: linear-gradient(
-        180deg,
-        rgba(0, 0, 0, 0),
-        rgba(0, 0, 0, 0.35)
-      );
+      flex-wrap: wrap;
+      gap: 8px 8px;
+      padding: 8px 10px;
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 24px rgba(0, 0, 0, 0.15);
       z-index: 1001;
+    }
+    #toolbar .dropdown-menu {
+      top: auto;
+      bottom: 100%; /* открываем вверх */
+      left: 0;
+    }
+    /* Группы и кнопки — кликабельные и не крошатся */
+    #toolbar .group {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+      flex: 0 1 auto;
     }
     #toolbar button,
     #toolbar .tool {
@@ -212,11 +236,11 @@
       justify-content: center;
       border-radius: 10px;
     }
-    canvas {
-      block-size: auto;
-    }
     .hint {
       display: none;
+    }
+    canvas {
+      block-size: auto;
     }
   }
   /* Жесты и выделение — только нашими руками */
@@ -336,7 +360,7 @@
     left: 50%;
     top: 50%;
     transform: translate(-50%, -50%);
-    z-index: 100;
+    z-index: 2000; /* модалка над тулбаром */
     background: #fff;
     max-width: 400px;
   "
@@ -344,7 +368,9 @@
   <h2>Настройки</h2>
   <div class="row" style="flex-direction: column; gap: 4px">
     <label>Цвет фона <input id="bg" type="color" value="#ffffff" /></label>
-    <label>Цвет сетки <input id="gridColor" type="color" value="#cccccc" /></label>
+    <label
+      >Цвет сетки <input id="gridColor" type="color" value="#cccccc"
+    /></label>
     <label
       >Цвет курсора <input id="cursorColorInput" type="color" value="#007aff"
     /></label>
@@ -380,7 +406,9 @@
 </div>
 
 <script type="module" src="embed-png.js"></script>
-<script>window.schedulePull ||= function(){};</script>
+<script>
+  window.schedulePull ||= function () {};
+</script>
 <script src="net-webrtc.js"></script>
 <script type="module">
   import { exportEmbeddedPNG, importPNG } from "./embed-png.js";
@@ -390,35 +418,72 @@
   const genId = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
   // ===== canvases & camera =====
-  const stage = $("#stage");
   const grid = $("#grid"),
     gtx = grid.getContext("2d");
   const cvs = $("#cvs"),
     ctx = cvs.getContext("2d");
-  cvs.addEventListener("dblclick", (e) => e.preventDefault(), { passive: false });
+  cvs.addEventListener("dblclick", (e) => e.preventDefault(), {
+    passive: false,
+  });
   ["gesturestart", "gesturechange", "gestureend"].forEach((evt) =>
     cvs.addEventListener(evt, (e) => e.preventDefault(), { passive: false }),
   );
+  function isMobileUI() {
+    return matchMedia("(max-width: 768px), (pointer: coarse)").matches;
+  }
+  function getStageInsetPx() {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(
+      "--stage-bottom-inset",
+    );
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : 0;
+  }
   function adjustBottomInset() {
     const tb = document.getElementById("toolbar");
-    if (!tb) return;
-    const h = tb.getBoundingClientRect().height;
-    document.body.style.paddingBottom = Math.ceil(h + 8) + "px";
+    if (!tb) {
+      return;
+    }
+    // считаем инсет только когда тулбар виден и мы в мобильной раскладке
+    let inset = 0;
+    if (isMobileUI() && tb.style.display !== "none") {
+      const h = tb.getBoundingClientRect().height; // 1 или 2 строки
+      inset = Math.ceil(h + 8);
+    }
+    // двигаем низ холста и сетки
+    document.documentElement.style.setProperty(
+      "--stage-bottom-inset",
+      inset + "px",
+    );
+    // пересчёт размеров канвасов под новый инсет
+    resize();
   }
   if ("ResizeObserver" in window) {
-    new ResizeObserver(adjustBottomInset).observe(document.getElementById("toolbar"));
+    new ResizeObserver(adjustBottomInset).observe(
+      document.getElementById("toolbar"),
+    );
   } else {
     addEventListener("resize", () => setTimeout(adjustBottomInset, 0));
   }
   adjustBottomInset();
-  addEventListener("orientationchange", () => setTimeout(adjustBottomInset, 200));
-  addEventListener("load", adjustBottomInset);
+  addEventListener("orientationchange", () =>
+    setTimeout(adjustBottomInset, 200),
+  );
+  {
+    const mql = matchMedia("(max-width: 768px), (pointer: coarse)");
+    if (mql.addEventListener) {
+      mql.addEventListener("change", adjustBottomInset);
+    } else if (mql.addListener) {
+      mql.addListener(adjustBottomInset);
+    }
+  }
   let DPR = Math.max(1, devicePixelRatio || 1);
   let camera = { x: 0, y: 0, scale: 1 };
 
   function resize() {
-    const w = innerWidth,
-      h = innerHeight;
+    const w = innerWidth;
+    // уменьшаем высоту сцены на мобильном на величину инсета
+    const inset = isMobileUI() ? getStageInsetPx() : 0;
+    const h = Math.max(0, innerHeight - inset);
     DPR = Math.max(1, devicePixelRatio || 1);
     [grid, cvs].forEach((cn) => {
       cn.width = w * DPR;
@@ -545,7 +610,6 @@
   updateSelPattern();
 
   // ===== UI wiring =====
-  const toolbar = $("#toolbar");
   const toolButtons = $$(".tool");
   function setTool(t) {
     mode = t;
@@ -834,7 +898,8 @@
         if (latencyBadge.hidden) return;
         const rtt = Math.max(0, Math.round(performance.now() - t));
         const newText = rtt + " ms";
-        if (latencyBadge.textContent !== newText) latencyBadge.textContent = newText;
+        if (latencyBadge.textContent !== newText)
+          latencyBadge.textContent = newText;
       },
       onClose: () => stopPing(),
     });
@@ -843,7 +908,7 @@
 
   function lobbyToStage() {
     document.getElementById("lobby").style.display = "none";
-    stage.style.display = "block";
+    document.getElementById("stage").style.display = "block";
     document.getElementById("toolbar").style.display = "flex";
     resize();
     adjustBottomInset();
@@ -1713,7 +1778,12 @@
 
   function serializeState() {
     // ВАЖНО: не инкрементим здесь — просто возвращаем текущее
-    return { bg: bgColor, strokes: Array.from(strokes.values()), rev, deleted: [...deleted] };
+    return {
+      bg: bgColor,
+      strokes: Array.from(strokes.values()),
+      rev,
+      deleted: [...deleted],
+    };
   }
   function mergeState(state, opt = {}) {
     try {
@@ -1748,7 +1818,7 @@
         if (state.deleted.length) changed = true;
       }
       // поднять локальную ревизию до серверной/чужой
-      const srvRev = state && typeof state.rev === "number" ? (state.rev | 0) : 0;
+      const srvRev = state && typeof state.rev === "number" ? state.rev | 0 : 0;
       if (srvRev > rev) setRev(srvRev);
       requestRender();
       // ВАЖНО:
@@ -1832,9 +1902,11 @@
       clearTimeout(pullTimer);
       pullTimer = null;
     }
-    $("#stage").style.display = "none";
-    $("#toolbar").style.display = "none";
-    $("#lobby").style.display = "block";
+    document.getElementById("stage").style.display = "none";
+    document.getElementById("toolbar").style.display = "none";
+    document.getElementById("lobby").style.display = "block";
+    document.documentElement.style.setProperty("--stage-bottom-inset", "0px");
+    resize();
     renderRooms();
   }
 
