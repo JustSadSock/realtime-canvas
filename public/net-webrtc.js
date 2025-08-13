@@ -42,6 +42,12 @@
   let handlers = {};
   const peers = new Map();   // id -> { pc, dcR, dcC }
 
+  const WS_SUBPROTOCOL = null; // e.g. 'webrtc'
+  let pingTimer = null;
+  let retries = 0;
+  let lastConnect = { room: null, handlers: {}, url: null };
+  let manualClose = false;
+
   function noop() {}
 
   // ===== Утилиты =====
@@ -55,6 +61,36 @@
     let n = 0;
     for (const p of peers.values()) if (p.dcR && p.dcR.readyState === "open") n++;
     return n;
+  }
+
+  function startPing(ws) {
+    stopPing();
+    pingTimer = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(JSON.stringify({ type: "app_ping", t: Date.now() })); } catch {}
+      }
+    }, 15000);
+  }
+
+  function stopPing() {
+    if (pingTimer) clearInterval(pingTimer);
+    pingTimer = null;
+  }
+
+  function scheduleReconnect() {
+    if (manualClose) return;
+    const base = Math.min(30000, 1000 * Math.pow(2, retries++));
+    const jitter = Math.floor(Math.random() * 300);
+    const delay = base + jitter;
+    console.info("[signal] reconnect in", delay, "ms");
+    setTimeout(() => {
+      try {
+        connect(lastConnect.room, lastConnect.handlers, lastConnect.url);
+      } catch (e) {
+        console.error("reconnect failed", e);
+        scheduleReconnect();
+      }
+    }, delay);
   }
 
   // ===== Основное API =====
@@ -82,40 +118,49 @@
       onClose: h.onClose || noop,
       onPong: h.onPong || noop,
     };
-    roomId = String(targetRoomId || "public-room");
+    roomId = String(targetRoomId || window.roomId || "public-room");
+
+    lastConnect = { room: roomId, handlers: h, url: signalUrl };
 
     if (sws) {
+      // чтобы onclose старого сокета не запустил scheduleReconnect()
+      manualClose = true;
       try { sws.close(); } catch {}
       sws = null;
     }
+    manualClose = false; // для нового соединения
 
-    const url = typeof signalUrl === "string" ? signalUrl : cfg.SIGNAL_URL;
-    let opened = false;
-    sws = new WebSocket(url);
-    sws.onopen = () => {
-      opened = true;
-      log("ws open", url);
-      wsSend({ type: "join", roomId });
-    };
-    sws.onclose = (e) => {
-      log("ws close", e?.code, e?.reason || "");
-      // мягко закроем всех пиров
+    let url = typeof signalUrl === "string" ? signalUrl : cfg.SIGNAL_URL;
+    if (typeof location !== "undefined" && location.protocol === "https:" && url.startsWith("ws:")) {
+      url = url.replace(/^ws:/, "wss:");
+    }
+
+    sws = WS_SUBPROTOCOL ? new WebSocket(url, [WS_SUBPROTOCOL]) : new WebSocket(url);
+    sws.addEventListener("open", () => {
+      retries = 0;
+      console.info("[signal] open", sws.url);
+      const hello = { type: "join", roomId };
+      try {
+        sws.send(JSON.stringify(hello));
+        console.debug("[signal] ->", hello);
+      } catch (e) {
+        console.error("hello send failed", e);
+      }
+      startPing(sws);
+    });
+    sws.addEventListener("close", (e) => {
+      console.warn("[signal] close", { code: e.code, reason: e.reason, wasClean: e.wasClean });
+      stopPing();
       for (const [id, p] of peers) closePeer(id, p);
       peers.clear();
-      try {
-        handlers.onClose(e);
-      } catch {}
-    };
-    sws.onerror = (e) => {
-      log("ws error", e?.message || e);
-      if (!opened) {
-        try {
-          alert("Подключение к сигнал-серверу не удалось. Проверьте CSP и что URL начинается с wss://");
-        } catch {}
-      }
-    };
+      try { handlers.onClose(e); } catch {}
+      scheduleReconnect();
+    });
+    sws.addEventListener("error", (e) => {
+      console.error("[signal] error", e);
+    });
 
-    sws.onmessage = (e) => {
+    sws.addEventListener("message", (e) => {
       let m = null;
       try { m = JSON.parse(e.data); } catch { return; }
 
@@ -191,11 +236,13 @@
           return;
         }
       }
-      // игнор остального
-    };
+        // игнор остального
+      });
   }
 
   function disconnect() {
+    manualClose = true;
+    stopPing();
     if (sws) { try { wsSend({ type: "leave" }); sws.close(); } catch {} sws = null; }
     for (const [id, p] of peers) closePeer(id, p);
     peers.clear();
