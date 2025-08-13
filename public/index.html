@@ -531,6 +531,7 @@
     app.grid = document.getElementById("grid");
     app.gtx = app.grid.getContext("2d");
     app.cvs = document.getElementById("cvs");
+    app.cvs.style.touchAction = "none";
     app.ctx = app.cvs.getContext("2d");
 
     // Загрузка настроек/горячих клавиш/цветов и т.п.
@@ -1337,6 +1338,7 @@
   }
 
   function onPointerUp(e) {
+    try { app.cvs.releasePointerCapture?.(e.pointerId); } catch {}
     if (!app.ready) return;
     if (app.importActive) return;
     if (e.pointerType === "touch") {
@@ -1400,6 +1402,7 @@
   }
 
   function onPointerCancel(e) {
+    try { app.cvs.releasePointerCapture?.(e.pointerId); } catch {}
     if (!app.ready) return;
     if (app.importActive) return;
     touches.delete(e.pointerId);
