@@ -41,6 +41,7 @@
   let meId = null;
   let handlers = {};
   const peers = new Map();   // id -> { pc, dcR, dcC }
+  let lowPaused = false;
 
   const WS_SUBPROTOCOL = null; // e.g. 'webrtc'
   let pingTimer = null;
@@ -103,6 +104,7 @@
     saveState,
     disconnect,
     pingServer,
+    canSendLow,
   };
   window.Net = Net;
 
@@ -289,6 +291,7 @@
 
   // курсоры: быстрая рассылка по "легкому" каналу, без гарантии доставки
   function sendCursor({ x, y, drawing }) {
+    if (!canSendLow()) return;
     const obj = { type: "cursor", x, y, drawing: !!drawing };
     const s = JSON.stringify(obj);
     let sent = 0;
@@ -298,9 +301,34 @@
       }
     }
     if (sent === 0) {
-      // на крайняк — ретрансляция, чтобы телефон за NAT тоже видел
       wsSend({ type: "relay", op: obj });
     }
+  }
+
+  function dcLowBuffersOk() {
+    let max = 0;
+    for (const p of peers.values()) {
+      if (p.dcC && p.dcC.readyState === "open") {
+        max = Math.max(max, p.dcC.bufferedAmount || 0);
+      }
+    }
+    // Порог ~256К на самый забитый low-канал
+    return max < 262144;
+  }
+
+  function canSendLow() {
+    // если WS fallback забит — притормаживаем, но не блокируем dcC, если он ок
+    const wsBusy = !!(sws && sws.bufferedAmount > 2000000);
+    const dcOk = dcLowBuffersOk();
+    if (wsBusy && !dcOk) {
+      lowPaused = true;
+      return false;
+    }
+    if (lowPaused) {
+      const wsRecovered = !sws || sws.bufferedAmount < 500000;
+      if (wsRecovered && dcOk) lowPaused = false;
+    }
+    return true;
   }
 
   // ===== WebRTC =====
