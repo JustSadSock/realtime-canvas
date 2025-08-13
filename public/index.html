@@ -53,29 +53,32 @@
   }
   button {
     cursor: pointer;
-    transition:
-      background 0.2s,
-      box-shadow 0.2s;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: background 0.2s, box-shadow 0.2s, transform 0.1s;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
     background: linear-gradient(#fff, #e6e6e6);
   }
   button:active {
-    transform: translateY(1px);
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.2);
+    transform: scale(0.98);
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
   }
   button:hover {
     background: var(--accent);
     color: #fff;
   }
+  .tool {
+    transition: transform 0.08s, opacity 0.08s;
+  }
+  .tool.active {
+    transform: scale(1.08);
+  }
   button.active,
   .swatch.active,
-  #color.active,
-  .sz.active {
+  #color.active {
     box-shadow: 0 0 0 3px var(--accent);
   }
   .sz.active {
-    background: var(--accent);
-    color: #fff;
+    outline: 2px solid var(--accent);
+    box-shadow: none;
   }
   .row {
     display: flex;
@@ -301,10 +304,10 @@
   </div>
   <div class="group">
     <small>Толщина</small>
-    <button class="sz" data-v="2">2</button>
-    <button class="sz" data-v="6">6</button>
-    <button class="sz" data-v="12">12</button>
-    <button class="sz" data-v="24">24</button>
+    <button class="sz" data-v="2" aria-pressed="false" aria-label="Размер 2">2</button>
+    <button class="sz" data-v="6" aria-pressed="false" aria-label="Размер 6">6</button>
+    <button class="sz" data-v="12" aria-pressed="false" aria-label="Размер 12">12</button>
+    <button class="sz" data-v="24" aria-pressed="false" aria-label="Размер 24">24</button>
     <input id="size" type="range" min="1" max="40" value="6" title="толщина" />
   </div>
   <div class="group">
@@ -346,6 +349,22 @@
     <button id="settingsBtn" title="Настройки">⚙️</button>
   </div>
 </div>
+
+<div id="img-actions" style="display:none;position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:1102;gap:4px;">
+  <button id="img-place" title="Разместить" aria-label="Разместить">✅</button>
+  <button id="img-cancel" title="Отменить" aria-label="Отменить">✖️</button>
+</div>
+<div id="import-hint" style="display:none;position:fixed;left:50%;top:80px;transform:translateX(-50%);font-size:12px;color:var(--muted);z-index:1000;">щипните, чтобы масштабировать</div>
+<style>
+@media (max-width:768px), (pointer:coarse){
+  #img-actions{
+    top:auto; bottom:calc(env(safe-area-inset-bottom, 0) + 88px);
+  }
+  #import-hint{
+    top:auto; bottom:calc(env(safe-area-inset-bottom, 0) + 120px);
+  }
+}
+</style>
 
 <input id="imageLoader" type="file" accept="image/png" style="display: none" />
 
@@ -408,7 +427,6 @@
   <div class="row"><button id="settingsClose">Закрыть</button></div>
 </div>
 
-<script type="module" src="raster-import.js"></script>
 <script type="module" src="embed-png.js"></script>
 <script>
   window.schedulePull ||= function () {};
@@ -551,13 +569,12 @@
     ["gesturestart", "gesturechange", "gestureend"].forEach((evt) =>
       app.cvs.addEventListener(evt, (e) => e.preventDefault(), { passive: false }),
     );
-    app.cvs.addEventListener("dragover", onCanvasDragOver);
-    app.cvs.addEventListener("drop", onCanvasDrop);
     app.cvs.addEventListener("pointerdown", onPointerDown);
     app.cvs.addEventListener("pointermove", onPointerMove);
     app.cvs.addEventListener("pointerup", onPointerUp);
     app.cvs.addEventListener("pointercancel", onPointerCancel);
     app.cvs.addEventListener("wheel", onWheel, { passive: false });
+    app.cvs.addEventListener("contextmenu", (e) => e.preventDefault());
 
     if ("ResizeObserver" in window) {
       new ResizeObserver(adjustBottomInset).observe(
@@ -623,6 +640,7 @@
   let selection = null,
     selOp = null,
     selectionPreview = null;
+  let selRAF = 0;
   let cursorColor = "#007aff";
   const defaultHotkeys = {
     draw: "1",
@@ -690,6 +708,23 @@
     ptx.stroke();
     selPattern = app.ctx.createPattern(patternCanvas, "repeat");
   }
+
+  function ensureSelAnim(on) {
+    if (on && !selRAF) {
+      const tick = () => {
+        if (!selection) {
+          selRAF = 0;
+          return;
+        }
+        requestRender();
+        selRAF = requestAnimationFrame(tick);
+      };
+      selRAF = requestAnimationFrame(tick);
+    } else if (!on && selRAF) {
+      cancelAnimationFrame(selRAF);
+      selRAF = 0;
+    }
+  }
   // будет вызвано в boot() после инициализации контекста
 
   // ===== UI wiring =====
@@ -700,11 +735,11 @@
       btn.classList.toggle("active", btn.id === "tool-" + t),
     );
   }
-  $("#tool-draw").onclick = () => setTool("draw");
-  $("#tool-erase").onclick = () => setTool("erase");
-  $("#tool-select").onclick = () => setTool("select");
-  $("#tool-fill").onclick = () => setTool("fill");
-  $("#tool-pipette").onclick = () => setTool("pipette");
+  $("#tool-draw").onclick = () => { sfx.beep(660, 0.05); setTool("draw"); };
+  $("#tool-erase").onclick = () => { sfx.beep(660, 0.05); setTool("erase"); };
+  $("#tool-select").onclick = () => { sfx.beep(660, 0.05); setTool("select"); };
+  $("#tool-fill").onclick = () => { sfx.beep(660, 0.05); setTool("fill"); };
+  $("#tool-pipette").onclick = () => { sfx.beep(660, 0.05); setTool("pipette"); };
 
   const moreGroup = $("#more-group");
   $("#tool-more").onclick = (e) => {
@@ -742,14 +777,106 @@
   }
 
   const imageLoader = $("#imageLoader");
+  let pendingImage = null;
+  let previewDrag = null;
+  let imgPinch = null;
+  function showPlaceCancelUI(v) {
+    $("#img-actions").style.display = v ? "flex" : "none";
+    $("#import-hint").style.display = v ? "block" : "none";
+  }
+  function startImagePreview(img) {
+    pendingImage = {
+      img,
+      x: app.camera.x + 100,
+      y: app.camera.y + 100,
+      w: img.width,
+      h: img.height,
+      scale: Math.max(0.05, Math.min(16, 1)),
+    };
+    app.importActive = true;
+    showPlaceCancelUI(true);
+    setPreviewHotkeys(true);
+    sfx.beep(660, 0.05);
+    requestRender();
+  }
+  function cancelImagePreview() {
+    pendingImage = null;
+    app.importActive = false;
+    showPlaceCancelUI(false);
+    setPreviewHotkeys(false);
+    sfx.beep(330, 0.05);
+    requestRender();
+  }
+  function placeImagePreview() {
+    if (!pendingImage) {
+      sfx.beep(220, 0.05);
+      return;
+    }
+    const id = genId();
+    const s = {
+      id,
+      by: meId,
+      mode: "image",
+      x: pendingImage.x,
+      y: pendingImage.y,
+      w: pendingImage.w,
+      h: pendingImage.h,
+      data: pendingImage.img.src,
+    };
+    strokes.set(id, s);
+    cache.set(id, s);
+    deleted.delete(id);
+    s._img = pendingImage.img;
+    Net.sendReliable({ type: "add", stroke: { ...s, _img: undefined } });
+    myStack.push(id);
+    pendingImage = null;
+    app.importActive = false;
+    showPlaceCancelUI(false);
+    setPreviewHotkeys(false);
+    sfx.beep(880, 0.05);
+    requestRender();
+    debounceSave();
+  }
+  $("#img-place").onclick = placeImagePreview;
+  $("#img-cancel").onclick = cancelImagePreview;
+  async function downscaleImage(srcImg, max = 2048) {
+    const s = Math.min(1, max / Math.max(srcImg.width, srcImg.height));
+    if (s === 1) return srcImg;
+    const c = document.createElement("canvas");
+    c.width = Math.round(srcImg.width * s);
+    c.height = Math.round(srcImg.height * s);
+    const x = c.getContext("2d");
+    x.imageSmoothingQuality = "high";
+    x.drawImage(srcImg, 0, 0, c.width, c.height);
+    const out = new Image();
+    out.decoding = "async";
+    out.src = c.toDataURL("image/png");
+    await out.decode().catch(() => {});
+    return out;
+  }
+  function handleImageFile(file) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const img = new Image();
+      img.decoding = "async";
+      img.src = reader.result;
+      await img.decode().catch(() => {});
+      startImagePreview(await downscaleImage(img));
+    };
+    reader.onerror = () => sfx.beep(220, 0.05);
+    reader.readAsDataURL(file);
+  }
 
   const sizeButtons = $$(".sz");
   function setSize(v) {
     brush.size = v;
     $("#size").value = v;
-    sizeButtons.forEach((b) =>
-      b.classList.toggle("active", +b.dataset.v === v),
-    );
+    sizeButtons.forEach((b) => {
+      const active = +b.dataset.v === v;
+      b.classList.toggle("active", active);
+      b.setAttribute("aria-pressed", active);
+    });
   }
   $("#size").oninput = (e) => setSize(+e.target.value);
   sizeButtons.forEach((b) => (b.onclick = () => setSize(+b.dataset.v)));
@@ -772,11 +899,11 @@
     app.gridColor = e.target.value;
     drawGrid();
   };
-  $("#undo").onclick = undo;
-  $("#redo").onclick = redo;
-  $("#export").onclick = exportPNG;
-  $("#import").onclick = () => imageLoader.click();
-  $("#leave").onclick = leaveRoom;
+  $("#undo").onclick = () => { sfx.beep(660, 0.05); undo(); };
+  $("#redo").onclick = () => { sfx.beep(660, 0.05); redo(); };
+  $("#export").onclick = () => { sfx.beep(660, 0.05); exportPNG(); };
+  $("#import").onclick = () => { sfx.beep(660, 0.05); imageLoader.click(); };
+  $("#leave").onclick = () => { sfx.beep(660, 0.05); leaveRoom(); };
   $("#settingsBtn").onclick = () => {
     $("#settings").style.display = "block";
     $$(".hk").forEach((inp) => (inp.value = hotkeys[inp.dataset.action] || ""));
@@ -801,9 +928,9 @@
     sendPresence();
     requestRender();
   };
-  imageLoader.onchange = async (e) => {
+  imageLoader.onchange = (e) => {
     const file = e.target.files[0];
-    if (file) await window.beginImport(file);
+    handleImageFile(file);
     e.target.value = "";
     e.target.blur();
   };
@@ -813,28 +940,16 @@
     );
     if (item) {
       const file = item.getAsFile();
-      if (file) await window.beginImport(file);
+      if (file) handleImageFile(file);
     }
   });
-  function onCanvasDragOver(e) {
-    if (!app.ready) return;
-    if (app.importActive) return;
-    e.preventDefault();
-  }
-  async function onCanvasDrop(e) {
-    if (!app.ready) return;
-    if (app.importActive) return;
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) await window.beginImport(file);
-  }
   window.addEventListener("dragover", (e) => {
     e.preventDefault();
   });
   window.addEventListener("drop", async (e) => {
     e.preventDefault();
-    const f = e.dataTransfer.files[0];
-    if (f) await window.beginImport(f);
+    const f = [...e.dataTransfer.files].find((f) => f.type.startsWith("image/"));
+    if (f) handleImageFile(f);
   });
 
   document.addEventListener("keydown", (e) => {
@@ -1060,6 +1175,49 @@
   const cursorsMeta = new Map();
   const touches = new Map();
   let pinchStart = null;
+  let lastCursor = { x: 0, y: 0, t: 0 };
+  let netFlushTimer = null;
+  function maybeSendCursor(pos, drawing) {
+    const now = performance.now();
+    if (now - lastCursor.t < 16) return;
+    const dxw = Math.abs(pos.x - lastCursor.x);
+    const dyw = Math.abs(pos.y - lastCursor.y);
+    const pxThreshold = 0.75;
+    if (dxw * app.camera.scale < pxThreshold && dyw * app.camera.scale < pxThreshold)
+      return;
+    lastCursor = { x: pos.x, y: pos.y, t: now };
+    if (Net.canSendLow()) Net.sendCursor({ x: pos.x, y: pos.y, drawing });
+  }
+
+  function armNetFlush() {
+    if (netFlushTimer) return;
+    netFlushTimer = setInterval(() => {
+      if (
+        current &&
+        current.netPts &&
+        current.netPts.length >= 64 &&
+        !Net.canSendLow()
+      ) {
+        enqueue({
+          type: "stroke_pts",
+          id: current.id,
+          by: meId,
+          mode: current.mode,
+          tool: current.mode,
+          color: current.color,
+          size: current.size,
+          points: current.netPts.slice(),
+        });
+        current.netPts.length = 0;
+      }
+    }, 200);
+  }
+  function disarmNetFlush() {
+    if (netFlushTimer) {
+      clearInterval(netFlushTimer);
+      netFlushTimer = null;
+    }
+  }
 
   function getTouchState() {
     const pts = [...touches.values()];
@@ -1073,11 +1231,22 @@
 
   function onPointerDown(e) {
     if (!app.ready) return;
+    if (pendingImage) {
+      // держим drag, даже если курсор ушёл за канвас
+      try { app.cvs.setPointerCapture?.(e.pointerId); } catch {}
+      const w = toWorld(e);
+      previewDrag = { dx: w.x - pendingImage.x, dy: w.y - pendingImage.y };
+      return;
+    }
     if (app.importActive) return;
     app.cvs.setPointerCapture(e.pointerId);
     if (e.pointerType === "touch") {
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.size === 2) {
+        if (pendingImage) {
+          imgPinch = { ...getTouchState(), scale: pendingImage.scale };
+          return;
+        }
         pinchStart = { camera: { ...app.camera }, ...getTouchState() };
         if (current) {
           strokes.delete(current.id);
@@ -1106,15 +1275,18 @@
       isDown = false;
       return;
     }
+    // ▶ ЗАЛИВКА: кликом запускаем flood-fill и выходим
+    if (mode === "fill") {
+      const w = toWorld(e);
+      performFill(w);
+      isDown = false;
+      return;
+    }
     if (e.button === 1) {
       lastMove = { x: e.clientX, y: e.clientY };
       return;
     }
     const w = toWorld(e);
-    if (mode === "fill") {
-      performFill(w);
-      return;
-    }
     if (mode === "select") {
       if (selection) {
         const r = selection.rect;
@@ -1143,6 +1315,7 @@
             selOp.orig.set(id, cloneStroke(strokes.get(id)));
         } else {
           selection = null;
+          ensureSelAnim(false);
           selOp = { type: "select", points: [w] };
         }
       } else {
@@ -1158,6 +1331,7 @@
       color: mode === "erase" ? undefined : brush.color,
       size: brush.size,
       points: [w],
+      netPts: [],
     };
     strokes.set(current.id, current);
     cache.set(current.id, current);
@@ -1174,11 +1348,35 @@
       size: current.size,
       points: [w],
     });
+    armNetFlush();
     requestRender();
   }
 
   function onPointerMove(e) {
     if (!app.ready) return;
+    if (pendingImage) {
+      if (e.pointerType === "touch" && touches.has(e.pointerId)) {
+        touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (touches.size === 2 && imgPinch) {
+          const { dist } = getTouchState();
+          pendingImage.scale = clamp(imgPinch.scale * (dist / imgPinch.dist), 0.05, 16);
+          pendingImage.w = pendingImage.img.width * pendingImage.scale;
+          pendingImage.h = pendingImage.img.height * pendingImage.scale;
+          requestRender();
+          return;
+        }
+      }
+      const w = toWorld(e);
+      if (previewDrag) {
+        pendingImage.x = w.x - previewDrag.dx;
+        pendingImage.y = w.y - previewDrag.dy;
+      } else {
+        pendingImage.x = w.x - pendingImage.w / 2;
+        pendingImage.y = w.y - pendingImage.h / 2;
+      }
+      requestRender();
+      return;
+    }
     if (app.importActive) return;
     if (e.pointerType === "touch" && touches.has(e.pointerId)) {
       touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1204,7 +1402,7 @@
       if (touches.size > 1) return;
     }
     const w = toWorld(e);
-    if (e.buttons === 4 || (isDown && e.button === 1)) {
+    if ((e.buttons & 4) === 4) {
       if (lastMove) {
         app.camera.x -= (e.clientX - lastMove.x) / app.camera.scale;
         app.camera.y -= (e.clientY - lastMove.y) / app.camera.scale;
@@ -1300,21 +1498,32 @@
         }
       }
       requestRender();
-      Net.sendCursor({ x: w.x, y: w.y, drawing: false });
+      maybeSendCursor(w, false);
       return;
     }
     if (isDown && current && (mode === "draw" || mode === "erase")) {
-      current.points.push(w);
-      enqueue({
-        type: "stroke_pts",
-        id: current.id,
-        by: meId,
-        mode: current.mode,
-        tool: current.mode,
-        color: current.color,
-        size: current.size,
-        points: [w],
-      });
+      const lp = current.points[current.points.length - 1];
+      const dx = (w.x - lp.x) * app.camera.scale;
+      const dy = (w.y - lp.y) * app.camera.scale;
+      if (dx * dx + dy * dy >= 0.25) {
+        current.points.push(w);
+        // всегда копим локально
+        current.netPts.push(w);
+        // а чанк отправляем только когда low-канал не на паузе
+        if (current.netPts.length >= 64 && Net.canSendLow()) {
+          enqueue({
+            type: "stroke_pts",
+            id: current.id,
+            by: meId,
+            mode: current.mode,
+            tool: current.mode,
+            color: current.color,
+            size: current.size,
+            points: current.netPts.slice(),
+          });
+          current.netPts.length = 0;
+        }
+      }
       requestRender();
     }
     if (mode === "erase" && isDown) {
@@ -1334,13 +1543,23 @@
         requestRender();
       }
     }
-    Net.sendCursor({ x: w.x, y: w.y, drawing: isDown });
+    maybeSendCursor(w, isDown);
   }
 
   function onPointerUp(e) {
     try { app.cvs.releasePointerCapture?.(e.pointerId); } catch {}
     if (!app.ready) return;
+    if (pendingImage) {
+      if (e.pointerType === "touch") {
+        touches.delete(e.pointerId);
+        if (touches.size < 2) imgPinch = null;
+      }
+      previewDrag = null;
+      return;
+    }
     if (app.importActive) return;
+    // горячие клавиши предпросмотра
+    document.onkeydown = null;
     if (e.pointerType === "touch") {
       touches.delete(e.pointerId);
       if (pinchStart) {
@@ -1353,6 +1572,20 @@
     }
     isDown = false;
     lastMove = null;
+    disarmNetFlush();
+    if (current && current.netPts && current.netPts.length) {
+      enqueue({
+        type: "stroke_pts",
+        id: current.id,
+        by: meId,
+        mode: current.mode,
+        tool: current.mode,
+        color: current.color,
+        size: current.size,
+        points: current.netPts.slice(),
+      });
+      current.netPts.length = 0;
+    }
     if (mode === "select" && selOp) {
       if (selOp.type === "select" && selOp.points) {
         const poly = selOp.points;
@@ -1372,6 +1605,7 @@
             Net.sendReliable({ type: "add", stroke: payload });
           }
       }
+      ensureSelAnim(!!selection);
       selOp = null;
       selectionPreview = null;
       requestRender();
@@ -1401,9 +1635,46 @@
     }
   }
 
+  // Навешиваем хоткеи, пока есть pendingImage
+  function setPreviewHotkeys(on) {
+    document.onkeydown = on
+      ? (ev) => {
+          if (ev.key === "Enter") {
+            placeImagePreview();
+            ev.preventDefault();
+          }
+          if (ev.key === "Escape") {
+            cancelImagePreview();
+            ev.preventDefault();
+          }
+        }
+      : null;
+  }
+
   function onPointerCancel(e) {
     try { app.cvs.releasePointerCapture?.(e.pointerId); } catch {}
     if (!app.ready) return;
+    // если был активный штрих — досылаем буфер
+    if (current && current.netPts && current.netPts.length) {
+      enqueue({
+        type: "stroke_pts",
+        id: current.id,
+        by: meId,
+        mode: current.mode,
+        tool: current.mode,
+        color: current.color,
+        size: current.size,
+        points: current.netPts.slice(),
+      });
+      current.netPts.length = 0;
+    }
+    disarmNetFlush();
+    if (pendingImage) {
+      touches.delete(e.pointerId);
+      imgPinch = null;
+      previewDrag = null;
+      return;
+    }
     if (app.importActive) return;
     touches.delete(e.pointerId);
     pinchStart = null;
@@ -1412,6 +1683,15 @@
   // зум/пан колесом
   function onWheel(e) {
     if (!app.ready) return;
+    if (pendingImage) {
+      e.preventDefault();
+      const k = Math.pow(1.0015, -e.deltaY);
+      pendingImage.scale = clamp(pendingImage.scale * k, 0.05, 16);
+      pendingImage.w = pendingImage.img.width * pendingImage.scale;
+      pendingImage.h = pendingImage.img.height * pendingImage.scale;
+      requestRender();
+      return;
+    }
     if (app.importActive) return;
     e.preventDefault();
     const mouse = { clientX: e.clientX, clientY: e.clientY };
@@ -1442,6 +1722,7 @@
         Net.sendReliable({ type: "del", id });
       }
       selection = null;
+      ensureSelAnim(false);
       requestRender();
       debounceSave();
     }
@@ -1668,77 +1949,93 @@
     updateRasterBBox(s);
   }
 
+  // === Deterministic flood-fill: convert to world-space raster runs ===
   function performFill(w) {
-    const x = Math.round((w.x - app.camera.x) * app.camera.scale * app.DPR);
-    const y = Math.round((w.y - app.camera.y) * app.camera.scale * app.DPR);
-    const W = app.cvs.width,
-      H = app.cvs.height;
-    if (x < 0 || y < 0 || x >= W || y >= H) return;
-    const img = app.ctx.getImageData(0, 0, W, H);
-    const data = img.data;
-    const idx = (y * W + x) * 4;
-    const target = [data[idx], data[idx + 1], data[idx + 2], data[idx + 3]];
+    const W = app.cvs.width, H = app.cvs.height;
+    const snap = app.ctx.getImageData(0, 0, W, H);
+    const data = snap.data;
+    const x0 = Math.round((w.x - app.camera.x) * app.camera.scale * app.DPR);
+    const y0 = Math.round((w.y - app.camera.y) * app.camera.scale * app.DPR);
+    if (x0 < 0 || y0 < 0 || x0 >= W || y0 >= H) return;
+
+    const i0 = (y0 * W + x0) * 4;
+    const tgt = [data[i0], data[i0 + 1], data[i0 + 2], data[i0 + 3]];
+    const tol = 24, atol = 32;
+    const seen = new Uint8Array(W * H);
     const mask = new Uint8Array(W * H);
-    const stack = [x, y];
+    const stack = [x0, y0];
+    seen[y0 * W + x0] = 1;
+
+    const pxOk = (i) =>
+      Math.abs(data[i] - tgt[0]) <= tol &&
+      Math.abs(data[i + 1] - tgt[1]) <= tol &&
+      Math.abs(data[i + 2] - tgt[2]) <= tol &&
+      Math.abs(data[i + 3] - tgt[3]) <= atol;
+
     while (stack.length) {
-      const yy = stack.pop();
-      const xx = stack.pop();
-      if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
-      const mi = yy * W + xx;
-      if (mask[mi]) continue;
-      const i = mi * 4;
-      const a = data[i + 3];
-      if (a < 32) continue;
-      if (
-        Math.abs(data[i] - target[0]) > 24 ||
-        Math.abs(data[i + 1] - target[1]) > 24 ||
-        Math.abs(data[i + 2] - target[2]) > 24 ||
-        Math.abs(a - target[3]) > 24
-      )
-        continue;
-      mask[mi] = 1;
-      stack.push(xx + 1, yy, xx - 1, yy, xx, yy + 1, xx, yy - 1);
-    }
-    const dil = new Uint8Array(W * H);
-    for (let yy = 0; yy < H; yy++) {
-      for (let xx = 0; xx < W; xx++) {
-        const i = yy * W + xx;
-        if (mask[i]) {
-          for (let dy = -1; dy <= 1; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              const nx = xx + dx,
-                ny = yy + dy;
-              if (nx >= 0 && ny >= 0 && nx < W && ny < H) dil[ny * W + nx] = 1;
-            }
-          }
+      const y = stack.pop();
+      const x = stack.pop();
+      let xl = x, xr = x;
+      for (;;) {
+        const il = (y * W + (xl - 1)) * 4;
+        if (xl <= 0 || seen[y * W + (xl - 1)] || !pxOk(il)) break;
+        xl--;
+        seen[y * W + xl] = 1;
+      }
+      for (;;) {
+        const ir = (y * W + (xr + 1)) * 4;
+        if (xr >= W - 1 || seen[y * W + (xr + 1)] || !pxOk(ir)) break;
+        xr++;
+        seen[y * W + xr] = 1;
+      }
+      for (let xx = xl; xx <= xr; xx++) mask[y * W + xx] = 1;
+      for (const ny of [y - 1, y + 1]) {
+        if (ny < 0 || ny >= H) continue;
+        let run = false;
+        for (let xx = xl; xx <= xr; xx++) {
+          const idx = ny * W + xx;
+          if (!seen[idx]) {
+            const ip = (ny * W + xx) * 4;
+            if (pxOk(ip)) {
+              seen[idx] = 1;
+              if (!run) {
+                stack.push(xx, ny);
+                run = true;
+              }
+            } else if (run) run = false;
+          } else if (run) run = false;
         }
       }
     }
-    const off = document.createElement("canvas");
-    off.width = W;
-    off.height = H;
-    const ox = off.getContext("2d");
-    const [r, g, b] = hexToRgb(brush.color);
-    const outImg = ox.createImageData(W, H);
-    for (let i = 0; i < dil.length; i++) {
-      if (dil[i]) {
-        const j = i * 4;
-        outImg.data[j] = r;
-        outImg.data[j + 1] = g;
-        outImg.data[j + 2] = b;
-        outImg.data[j + 3] = 255;
+
+    const runs = [];
+    const inv = 1 / (app.camera.scale * app.DPR);
+    const rowH = inv;
+    for (let y = 0; y < H; y++) {
+      let x = 0;
+      while (x < W) {
+        while (x < W && !mask[y * W + x]) x++;
+        if (x >= W) break;
+        const xStart = x;
+        while (x < W && mask[y * W + x]) x++;
+        const xEnd = x - 1;
+        const wx0 = app.camera.x + xStart * inv;
+        const wx1 = app.camera.x + (xEnd + 1) * inv;
+        const wy = app.camera.y + y * inv;
+        runs.push({ y: wy, x0: wx0, x1: wx1, color: brush.color });
       }
     }
-    ox.putImageData(outImg, 0, 0);
-    const stroke = window.vectorizeToRasterRuns(off, {
-      x: app.camera.x,
-      y: app.camera.y,
-      scale: 1 / (app.camera.scale * app.DPR),
-    });
-    mergeState({ strokes: [stroke] });
-    myStack.push(stroke.id);
+    if (!runs.length) return;
+
+    const id = genId();
+    const stroke = { id, by: meId, mode: "raster", color: brush.color, runs, rowH };
+    updateRasterBBox(stroke);
+    strokes.set(id, stroke);
+    cache.set(id, stroke);
+    deleted.delete(id);
+    myStack.push(id);
     const payload = { ...stroke };
-    if (payload._bbox) delete payload._bbox;
+    delete payload._bbox;
     Net.sendReliable({ type: "add", stroke: payload });
     requestRender();
     debounceSave();
@@ -1844,10 +2141,23 @@
       app.ctx.stroke();
       app.ctx.restore();
     }
+    if (pendingImage) {
+      const p = pendingImage;
+      const x = (p.x - app.camera.x) * app.camera.scale;
+      const y = (p.y - app.camera.y) * app.camera.scale;
+      const w = p.w * app.camera.scale;
+      const h = p.h * app.camera.scale;
+      app.ctx.save();
+      app.ctx.globalAlpha = 0.5;
+      app.ctx.drawImage(p.img, x, y, w, h);
+      app.ctx.setLineDash([4, 4]);
+      app.ctx.strokeStyle = "#888";
+      app.ctx.strokeRect(x, y, w, h);
+      app.ctx.restore();
+    }
     if (selection) drawSel(selection.path, selection.rect, true);
     if (selectionPreview)
       drawSel(selectionPreview, bboxOfPoints(selectionPreview), false);
-    if (selection || selectionPreview) requestRender();
     // курсоры
     const now = Date.now();
     for (const [id, c] of cursors) {
@@ -1963,22 +2273,6 @@
       cursorsMeta.set(op.id, { color: op.cursorColor || "#007aff" });
       return;
     }
-    if (op.type === "fill") {
-      const s = {
-        id: op.id,
-        by: op.by,
-        mode: "fill",
-        color: op.color,
-        size: 0,
-        points: [{ x: op.x, y: op.y }],
-      };
-      strokes.set(op.id, s);
-      cache.set(op.id, s);
-      deleted.delete(op.id);
-      requestRender();
-      debounceSave();
-      return;
-    }
     if (op.type === "del") {
       strokes.delete(op.id);
       deleted.add(op.id);
@@ -2017,23 +2311,6 @@
     }
   }
 
-  function serializeState() {
-  // ВАЖНО: не инкрементим здесь — просто возвращаем текущее
-  const out = [];
-  for (const s of strokes.values()) {
-    const copy = { ...s };
-    // убираем кэшевые/не сериализуемые поля
-    delete copy._bbox;
-    delete copy._img;
-    out.push(copy);
-  }
-  return {
-    bg: app.bgColor,
-    strokes: out,
-    rev,
-    deleted: [...deleted], // поддержка soft-delete
-  };
-}
   function mergeState(state, opt = {}) {
     try {
       let changed = false;
@@ -2057,8 +2334,8 @@
             (had.points?.length || 0) < (s.points?.length || 0)
           ) {
             if (s.mode === "image" && had.mode === "image") {
-              const sigHad = `${had.w}x${had.h}:${had.src?.length || 0}`;
-              const sigNew = `${s.w}x${s.h}:${s.src?.length || 0}`;
+              const sigHad = `${had.w}x${had.h}:${had.data?.length || 0}`;
+              const sigNew = `${s.w}x${s.h}:${s.data?.length || 0}`;
               if (sigHad === sigNew) continue;
             }
             if (s.mode === "raster" && had.mode === "raster") {
@@ -2108,10 +2385,26 @@
     genId,
   });
 
+  // Сохраняем только сериализуемые, «тонкие» поля
+  function serializeState() {
+    const out = [];
+    for (const s of strokes.values()) {
+      const copy = { ...s };
+      delete copy._img;
+      delete copy._bbox;
+      out.push(copy);
+    }
+    return { bg: app.bgColor, strokes: out, rev, deleted: [...deleted] };
+  }
+
   // undo/redo
   function undo() {
     const id = myStack.pop();
-    if (!id) return;
+    if (!id) {
+      sfx.beep(220, 0.05);
+      return;
+    }
+    sfx.beep(660, 0.05);
     Net.sendReliable({ type: "del", id });
     strokes.delete(id);
     deleted.add(id);
@@ -2121,7 +2414,11 @@
   }
   function redo() {
     const id = redoStack.pop();
-    if (!id) return;
+    if (!id) {
+      sfx.beep(220, 0.05);
+      return;
+    }
+    sfx.beep(660, 0.05);
     const s = cache.get(id);
     if (!s) return;
     strokes.set(id, s);
@@ -2141,12 +2438,14 @@
       return;
     }
     const blob = await exportEmbeddedPNG();
+    const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    a.href = url;
     a.download = "canvas.png";
     document.body.appendChild(a);
     a.click();
     a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 
   function leaveRoom() {
@@ -2159,6 +2458,8 @@
     myStack.length = 0;
     redoStack.length = 0;
     deleted.clear();
+    selection = null;
+    ensureSelAnim(false);
     if (pullTimer) {
       clearTimeout(pullTimer);
       pullTimer = null;
@@ -2228,4 +2529,43 @@
       Net.saveState(serializeState());
     } catch {}
   });
+
+  const sfx = (() => {
+    let ctx = null, enabled = JSON.parse(localStorage.getItem("sfx") || "true");
+    function beep(freq = 880, dur = 0.06, vol = 0.07) {
+      if (!enabled) return;
+      try {
+        ctx ||= new (window.AudioContext || window.webkitAudioContext)();
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.frequency.value = freq;
+        o.type = "sine";
+        g.gain.value = 0;
+        o.connect(g);
+        g.connect(ctx.destination);
+        const t = ctx.currentTime;
+        g.gain.setValueAtTime(0, t);
+        g.gain.linearRampToValueAtTime(vol, t + 0.005);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.start(t);
+        o.stop(t + dur + 0.01);
+      } catch {}
+    }
+    return {
+      beep,
+      set(v) {
+        enabled = v;
+        localStorage.setItem("sfx", JSON.stringify(!!v));
+      },
+    };
+  })();
+  document.getElementById("settings")?.insertAdjacentHTML(
+    "beforeend",
+    `<label class="row"><input id="opt-sfx" type="checkbox"> Звуки интерфейса</label>`,
+  );
+  const sfxBox = document.getElementById("opt-sfx");
+  if (sfxBox) {
+    sfxBox.checked = JSON.parse(localStorage.getItem("sfx") || "true");
+    sfxBox.onchange = () => sfx.set(sfxBox.checked);
+  }
 </script>
