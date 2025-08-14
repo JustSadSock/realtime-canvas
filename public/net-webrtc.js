@@ -174,10 +174,9 @@
         return;
       }
       if (m.type === "joined") {
-        meId = m.id || meId;
-        roomId = m.roomId || roomId;
+        meId = m.id;
         log("pc", "joined", roomId, "peers", m.peers);
-        handlers.onJoined({ me: meId, roomId, peers: m.peers || [] });
+        handlers.onJoined({ me: meId, peers: m.peers || [] });
 
         // инициируем коннекты ко всем текущим пирами
         for (const pid of m.peers || []) ensurePeer(pid, /*initiator*/ true);

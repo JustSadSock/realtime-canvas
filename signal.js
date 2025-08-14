@@ -138,11 +138,19 @@ wss.on("connection", (ws, req) => {
       peers.set(ws, meta);
       addToRoom(roomId, ws);
       log(`#${id} joined "${roomId}" (size=${rooms.get(roomId)?.size || 0})`);
+      // список пиров, уже находящихся в комнате
+      const set = rooms.get(roomId) || new Set();
+      const peerIds = [];
+      for (const client of set) {
+        if (client === ws) continue;
+        const pid = peers.get(client)?.id;
+        if (pid) peerIds.push(pid);
+      }
+      // сообщим подключившемуся его id и список пиров
+      safeSend(ws, { type: "joined", id: meta.id, peers: peerIds });
       // отдадим состояние, если есть
       const st = roomState.get(roomId);
       if (st) safeSend(ws, { type: "state_full", state: st });
-      // уведомление о пирах (минимально)
-      safeSend(ws, { type: "peers", room: roomId, count: rooms.get(roomId)?.size || 1 });
       return;
     }
 
