@@ -127,7 +127,7 @@
     if (sws) {
       // чтобы onclose старого сокета не запустил scheduleReconnect()
       manualClose = true;
-      try { sws.close(); } catch {}
+      try { sws.close(1000, "done"); } catch {}
       sws = null;
     }
     manualClose = false; // для нового соединения
@@ -244,7 +244,7 @@
   function disconnect() {
     manualClose = true;
     stopPing();
-    if (sws) { try { wsSend({ type: "leave" }); sws.close(); } catch {} sws = null; }
+    if (sws) { try { wsSend({ type: "leave" }); sws.close(1000, "done"); } catch {} sws = null; }
     for (const [id, p] of peers) closePeer(id, p);
     peers.clear();
     roomId = null;
