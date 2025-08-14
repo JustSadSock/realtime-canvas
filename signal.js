@@ -47,6 +47,9 @@ function nowISO() {
 function log(...a) {
   console.log(`[signal] ${nowISO()}`, ...a);
 }
+function warn(...a) {
+  console.warn(`[signal] ${nowISO()}`, ...a);
+}
 function safeSend(ws, obj) {
   if (!ws || ws.readyState !== ws.OPEN) return;
   try { ws.send(JSON.stringify(obj)); } catch {}
@@ -191,7 +194,14 @@ wss.on("connection", (ws, req) => {
     const meta = peers.get(ws);
     const roomId = meta?.roomId;
     if (roomId) rmFromRoom(roomId, ws);
-    log(`WS close #${meta?.id || "?"} code=${code} reason="${reason}" room=${roomId || "-"}`);
+    const msg = `WS close #${meta?.id || "?"} code=${code} reason="${reason}" room=${roomId || "-"}`;
+    if (code === 1000) {
+      log(msg);
+    } else if (code === 1005) {
+      warn(`${msg} (no status)`);
+    } else {
+      warn(msg);
+    }
     peers.delete(ws);
   });
 
