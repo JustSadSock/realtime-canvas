@@ -1,156 +1,227 @@
-// signal.js — HTTP (раздаёт ./public) + WebSocket-сигналинг WebRTC
-// + простая персистенция состояния комнаты в памяти процесса
+#!/usr/bin/env node
+/**
+ * Minimal-but-robust signaling server for WebRTC.
+ * - WS path: /ws (configurable)
+ * - Keep-alive: server → ping every 10s, close on 20s silence (sends proper close frame)
+ * - Accepts client "ping" messages and replies "pong"
+ * - Rooms with relay, optional state cache (state_req/state_save)
+ * - Lists rooms: {type:"list"} → {type:"rooms", rooms:[{id,count}]}
+ * - Serves /config.json with SIGNAL_URL
+ */
 
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const WebSocket = require('ws');
+const http = require("http");
+const { WebSocketServer } = require("ws");
+const url = require("url");
+const crypto = require("crypto");
 
-const PORT = process.env.PORT || 8090;
+// ---------- config ----------
+const PORT = +(process.env.PORT || arg("--port", "8090"));
+const WS_PATH = process.env.WS_PATH || arg("--path", "/ws") || "/ws";
+// PUBLIC_WS_URL влияет на /config.json
+const PUBLIC_WS_URL =
+  process.env.PUBLIC_WS_URL || arg("--public", "") || "";
 
-// ---- HTTP: отдаём ./public (для локальной проверки клиента)
-const server = http.createServer((req, res) => {
-  const reqPath = (req.url || '/').split('?')[0];
-  if (reqPath === '/healthz') {
-    res.writeHead(200, {'Content-Type':'text/plain'}); return res.end('ok');
-  }
-  const root = path.join(__dirname, 'public');
-  let filePath = path.join(root, reqPath === '/' ? 'index.html' : reqPath);
-  if (!filePath.startsWith(root)) { res.writeHead(403); return res.end('Forbidden'); }
-  fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404); return res.end('Not found'); }
-    const ext = path.extname(filePath).slice(1).toLowerCase();
-    const mime = {
-      html:'text/html', js:'text/javascript', css:'text/css',
-      json:'application/json', png:'image/png', svg:'image/svg+xml'
-    }[ext] || 'application/octet-stream';
-    res.writeHead(200, { 'Content-Type': mime });
-    res.end(data);
-  });
-});
+// keep-alive: ping раз в 10с, ждём 20с
+const KA_INTERVAL_MS = 10_000;
+const KA_TIMEOUT_MS = 20_000;
 
-// ---- WS: сигналинг с комнатами + хранение состояния
-const wss = new WebSocket.Server({ server });
-
-/** roomId -> Set<ws> */
+// ---------- state ----------
+/** @type {Map<string, Set<WebSocket>>} */
 const rooms = new Map();
-/** roomId -> arbitrary state (например {strokes:[...]}) */
-const roomStates = new Map();
+/** @type {WeakMap<WebSocket, {id:string, roomId?:string, isAlive:boolean, ua?:string, ip?:string}>} */
+const peers = new WeakMap();
+/** @type {Map<string, any>} */
+const roomState = new Map(); // state_save/state_req
 
-const uid = () => Math.random().toString(36).slice(2, 10);
-const send = (ws, o) => { try { ws.send(JSON.stringify(o)); } catch {} };
+// ---------- utils ----------
+function arg(name, def) {
+  const i = process.argv.indexOf(name);
+  return i > -1 ? (process.argv[i + 1] || def) : def;
+}
+function rid(n = 8) {
+  return crypto.randomBytes(n).toString("hex");
+}
+function nowISO() {
+  return new Date().toISOString().replace("T", " ").replace("Z", "");
+}
+function log(...a) {
+  console.log(`[signal] ${nowISO()}`, ...a);
+}
+function safeSend(ws, obj) {
+  if (!ws || ws.readyState !== ws.OPEN) return;
+  try { ws.send(JSON.stringify(obj)); } catch {}
+}
+function addToRoom(roomId, ws) {
+  let set = rooms.get(roomId);
+  if (!set) rooms.set(roomId, (set = new Set()));
+  set.add(ws);
+}
+function rmFromRoom(roomId, ws) {
+  const set = rooms.get(roomId);
+  if (!set) return;
+  set.delete(ws);
+  if (set.size === 0) rooms.delete(roomId);
+}
 
-wss.on('connection', (ws) => {
-  ws.id = uid();
-  ws.roomId = null;
-  ws.isAlive = true;
-
-  send(ws, { type: 'hello', id: ws.id });
-
-  ws.on('pong', () => (ws.isAlive = true));
-
-  ws.on('message', (buf) => {
-    let m; try { m = JSON.parse(buf); } catch { return; }
-
-    // список комнат
-    if (m.type === 'list') {
-      const list = [...rooms.entries()].map(([id, set]) => ({ id, users: set.size }));
-      return send(ws, { type: 'rooms', rooms: list });
+// ---------- HTTP server ----------
+const server = http.createServer((req, res) => {
+  const u = url.parse(req.url || "", true);
+  if (u.pathname === "/config.json") {
+    // Формируем SIGNAL_URL: либо PUBLIC_WS_URL, либо локальный ws://host:PORT/WS_PATH
+    let wsUrl = PUBLIC_WS_URL.trim();
+    if (!wsUrl) {
+      const host = req.headers["host"] || `localhost:${PORT}`;
+      const scheme = (req.headers["x-forwarded-proto"] || "http") === "https" ? "wss" : "ws";
+      const path = WS_PATH.startsWith("/") ? WS_PATH : `/${WS_PATH}`;
+      wsUrl = `${scheme}://${host}${path}`;
     }
+    const payload = JSON.stringify({ SIGNAL_URL: wsUrl });
+    res.writeHead(200, {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    });
+    return void res.end(payload);
+  }
 
-    // вход в комнату
-    if (m.type === 'join') {
-      const roomId = String(m.roomId || '').trim();
-      if (!roomId) return send(ws, { type: 'join_error', reason: 'empty_room' });
+  // простая диагностика
+  if (u.pathname === "/" || u.pathname === "/healthz") {
+    res.writeHead(200, { "Content-Type": "text/plain" });
+    return void res.end("ok\n");
+  }
 
-      // отцепим от старой
-      if (ws.roomId) {
-        const old = rooms.get(ws.roomId);
-        if (old) {
-          old.delete(ws);
-          for (const c of old) send(c, { type: 'peer_left', id: ws.id });
-          if (!old.size) {
-            rooms.delete(ws.roomId);
-            // по желанию можно чистить roomStates.delete(ws.roomId)
-          }
-        }
-      }
-      ws.roomId = roomId;
-      if (!rooms.has(roomId)) rooms.set(roomId, new Set());
-      const room = rooms.get(roomId);
-      room.add(ws);
+  res.writeHead(404);
+  res.end();
+});
 
-      const peers = [...room].filter(c => c !== ws).map(c => c.id);
-      send(ws, { type: 'joined', id: ws.id, roomId, peers });
+// ---------- WS server ----------
+const wss = new WebSocketServer({
+  server,
+  path: WS_PATH,
+  // perMessageDeflate можно выключить для простоты через прокси
+  perMessageDeflate: false,
+  clientTracking: true,
+});
 
-      // inform new client about current revision if exists
-      const st = roomStates.get(roomId);
-      if (st && st.rev != null) send(ws, { type: 'state_rev', rev: st.rev });
+wss.on("connection", (ws, req) => {
+  const id = rid(6);
+  const ip =
+    req.headers["x-forwarded-for"]?.toString().split(",")[0].trim() ||
+    req.socket.remoteAddress ||
+    "";
+  const ua = req.headers["user-agent"] || "";
+  peers.set(ws, { id, isAlive: true, ua, ip });
 
-      for (const c of room) if (c !== ws) send(c, { type: 'peer_joined', id: ws.id });
-      return;
-    }
+  log(`WS connection #${id} ip=${ip} ua="${ua}"`);
 
-    // пересылка SDP/ICE
-    if (m.type === 'signal') {
-      if (!ws.roomId) return;
-      const room = rooms.get(ws.roomId); if (!room) return;
-      const out = { type: 'signal', from: ws.id, payload: m.payload };
-      if (m.to) {
-        for (const c of room) if (c.id === m.to && c.readyState === 1) return send(c, out);
-      } else {
-        for (const c of room) if (c !== ws && c.readyState === 1) send(c, out);
-      }
-      return;
-    }
-
-    if (m.type === 'app_ping') {
-      return send(ws, { type: 'app_pong', t: m.t });
-    }
-
-    // ===== хранение состояния комнаты (снэпшот холста) =====
-
-    // клиент просит отдать сохранённое состояние комнаты
-    if (m.type === 'state_load') {
-      const st = ws.roomId ? roomStates.get(ws.roomId) : null;
-      return send(ws, { type:'state', state: st || null });
-    }
-
-    // клиент присылает состояние, сохранить
-    if (m.type === 'state_save') {
-      if (ws.roomId) {
-        const st = m.state || null;
-        roomStates.set(ws.roomId, st);
-        if (st && st.rev != null) {
-          const room = rooms.get(ws.roomId);
-          if (room) {
-            for (const c of room) if (c.readyState === 1) send(c, { type: 'state_rev', rev: st.rev });
-          }
-        }
-      }
-      return;
-    }
+  // Бразуер сам отвечает на ping-фреймы "pong". Мы ещё слушаем "pong" явно:
+  ws.on("pong", () => {
+    const p = peers.get(ws);
+    if (p) p.isAlive = true;
   });
 
-  ws.on('close', () => {
-    if (!ws.roomId) return;
-    const room = rooms.get(ws.roomId);
-    if (!room) return;
-    room.delete(ws);
-    for (const c of room) send(c, { type: 'peer_left', id: ws.id });
-    if (!room.size) {
-      rooms.delete(ws.roomId);
-      // по желанию: roomStates.delete(ws.roomId);
+  ws.on("message", (data) => {
+    let msg = null;
+    try { msg = JSON.parse(data.toString("utf8")); } catch {}
+    if (!msg || typeof msg !== "object") return;
+
+    const meta = peers.get(ws) || { id };
+    // Ответ на прикладной ping/pong
+    if (msg.type === "ping") {
+      safeSend(ws, { type: "pong", t: msg.t ?? Date.now() });
+      return;
     }
+
+    if (msg.type === "join" || msg.type === "hello") {
+      const roomId = String(msg.roomId || msg.room || "public-room");
+      meta.roomId = roomId;
+      peers.set(ws, meta);
+      addToRoom(roomId, ws);
+      log(`#${id} joined "${roomId}" (size=${rooms.get(roomId)?.size || 0})`);
+      // отдадим состояние, если есть
+      const st = roomState.get(roomId);
+      if (st) safeSend(ws, { type: "state_full", state: st });
+      // уведомление о пирах (минимально)
+      safeSend(ws, { type: "peers", room: roomId, count: rooms.get(roomId)?.size || 1 });
+      return;
+    }
+
+    if (msg.type === "relay" && meta.roomId) {
+      // ретрансляция в комнату (кроме отправителя)
+      const room = rooms.get(meta.roomId);
+      if (!room) return;
+      for (const client of room) {
+        if (client !== ws && client.readyState === client.OPEN) {
+          safeSend(client, msg.op);
+        }
+      }
+      return;
+    }
+
+    if (msg.type === "state_req" && meta.roomId) {
+      const st = roomState.get(meta.roomId);
+      if (st) safeSend(ws, { type: "state_full", state: st });
+      return;
+    }
+
+    if (msg.type === "state_save" && meta.roomId && msg.state) {
+      roomState.set(meta.roomId, msg.state);
+      return;
+    }
+
+    if (msg.type === "list") {
+      const out = [...rooms.entries()].map(([id, set]) => ({ id, count: set.size }));
+      safeSend(ws, { type: "rooms", rooms: out });
+      return;
+    }
+
+    // по умолчанию — просто эхо в клиента (для дебага)
+    safeSend(ws, { type: "ack", ok: true });
+  });
+
+  ws.on("close", (code, reason) => {
+    const meta = peers.get(ws);
+    const roomId = meta?.roomId;
+    if (roomId) rmFromRoom(roomId, ws);
+    log(`WS close #${meta?.id || "?"} code=${code} reason="${reason}" room=${roomId || "-"}`);
+    peers.delete(ws);
+  });
+
+  ws.on("error", (err) => {
+    log(`WS error #${peers.get(ws)?.id || "?"}:`, err.message || err);
   });
 });
 
-// heartbeats, чтобы не висли зомби
-setInterval(() => {
+// keep-alive цикл: пингуем, закрываем «зависших»
+const ka = setInterval(() => {
   for (const ws of wss.clients) {
-    if (!ws.isAlive) { try { ws.terminate(); } catch {} }
-    else { ws.isAlive = false; try { ws.ping(); } catch {} }
+    const meta = peers.get(ws);
+    if (!meta) continue;
+    if (meta.isAlive === false) {
+      try { ws.close(1001, "ping timeout"); } catch {}
+      continue;
+    }
+    meta.isAlive = false;
+    peers.set(ws, meta);
+    try { ws.ping(); } catch {}
   }
-}, 30000);
+}, KA_INTERVAL_MS);
 
-server.listen(PORT, () => console.log('Signaling HTTP+WS on :' + PORT));
+// аккуратно закрыть по SIGINT/SIGTERM
+function shutdown() {
+  clearInterval(ka);
+  for (const ws of wss.clients) {
+    try { ws.close(1001, "server shutdown"); } catch {}
+  }
+  server.close(() => process.exit(0));
+}
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
+
+// ---------- start ----------
+server.listen(PORT, () => {
+  log(`listening on :${PORT}  WS path: ${WS_PATH}`);
+  const fallback = `ws://localhost:${PORT}${WS_PATH.startsWith("/") ? WS_PATH : "/" + WS_PATH}`;
+  const announced = PUBLIC_WS_URL || fallback;
+  log(`For config.json set: { "SIGNAL_URL": "${announced}" }`);
+});
