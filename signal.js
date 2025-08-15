@@ -5,7 +5,7 @@
  * - Keep-alive: server → ping every 10s, close on 20s silence (sends proper close frame)
  * - Accepts client "ping" messages and replies "pong"
  * - Rooms with relay, optional state cache (state_req/state_save)
- * - Lists rooms: {type:"list"} → {type:"rooms", rooms:[{id,count}]}
+ * - Lists rooms: {type:"list"} → {type:"rooms", rooms:[{id,users}]}
  * - Serves /config.json with SIGNAL_URL
  */
 
@@ -181,7 +181,7 @@ wss.on("connection", (ws, req) => {
     }
 
     if (msg.type === "list") {
-      const out = [...rooms.entries()].map(([id, set]) => ({ id, count: set.size }));
+      const out = [...rooms.entries()].map(([id, set]) => ({ id, users: set.size }));
       safeSend(ws, { type: "rooms", rooms: out });
       return;
     }
