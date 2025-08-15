@@ -149,19 +149,24 @@
     }
 
     sws = WS_SUBPROTOCOL ? new WebSocket(url, [WS_SUBPROTOCOL]) : new WebSocket(url);
-    sws.addEventListener("open", () => {
+    const ws = sws; // локальная ссылка для обработчиков
+
+    ws.addEventListener("open", () => {
+      if (ws !== sws) return; // уже есть новый сокет
       retries = 0;
-      console.info("[signal] open", sws.url);
+      console.info("[signal] open", ws.url);
       const hello = { type: "join", roomId };
       try {
-        sws.send(JSON.stringify(hello));
+        ws.send(JSON.stringify(hello));
         console.debug("[signal] ->", hello);
       } catch (e) {
         console.error("hello send failed", e);
       }
-      startPing(sws);
+      startPing(ws);
     });
-    sws.addEventListener("close", (e) => {
+
+    ws.addEventListener("close", (e) => {
+      if (ws !== sws) return; // закрывается устаревший сокет
       console.warn("[signal] close", { code: e.code, reason: e.reason, wasClean: e.wasClean });
       stopPing();
       for (const [id, p] of peers) closePeer(id, p);
@@ -169,11 +174,14 @@
       try { handlers.onClose(e); } catch {}
       scheduleReconnect();
     });
-    sws.addEventListener("error", (e) => {
+
+    ws.addEventListener("error", (e) => {
+      if (ws !== sws) return;
       console.error("[signal] error", e);
     });
 
-    sws.addEventListener("message", (e) => {
+    ws.addEventListener("message", (e) => {
+      if (ws !== sws) return;
       let m = null;
       try { m = JSON.parse(e.data); } catch { return; }
 
