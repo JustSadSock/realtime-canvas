@@ -186,6 +186,27 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
+    if (msg.type === "signal" && msg.to) {
+      let targetWs = null;
+      for (const client of wss.clients) {
+        const p = peers.get(client);
+        if (p?.id === msg.to) {
+          targetWs = client;
+          break;
+        }
+      }
+      if (targetWs) {
+        safeSend(targetWs, {
+          type: "signal",
+          from: meta.id,
+          payload: msg.payload,
+        });
+      } else {
+        warn(`#${meta.id} signal target missing: ${msg.to}`);
+      }
+      return;
+    }
+
     // по умолчанию — просто эхо в клиента (для дебага)
     safeSend(ws, { type: "ack", ok: true });
   });
