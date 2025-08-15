@@ -20,20 +20,31 @@
   const defaultIce = [{ urls: ["stun:stun.l.google.com:19302"] }];
 
   let cfg = { SIGNAL_URL: "ws://localhost:8090", ICE_SERVERS: defaultIce, TURN: [] };
+  let configPromise = null;
+
+  function loadConfig() {
+    if (configPromise) return configPromise;
+    configPromise = fetch("config.json", { cache: "no-store" })
+      .then((r) => {
+        if (!r.ok) throw new Error(`config.json HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((j) => {
+        console.info("[signal] config.json =", j);
+        if (j && j.SIGNAL_URL) cfg.SIGNAL_URL = j.SIGNAL_URL;
+        cfg.ICE_SERVERS = Array.isArray(j?.ICE_SERVERS) && j.ICE_SERVERS.length ? j.ICE_SERVERS : defaultIce;
+        if (Array.isArray(j?.TURN) && j.TURN.length) cfg.ICE_SERVERS = [...cfg.ICE_SERVERS, ...j.TURN];
+        return j;
+      })
+      .catch((e) => {
+        console.error("[signal] failed to read config.json:", e);
+        return null;
+      });
+    return configPromise;
+  }
 
   // загружаем config.json (без кэша)
-  fetch("config.json", { cache: "no-store" })
-    .then((r) => {
-      if (!r.ok) throw new Error(`config.json HTTP ${r.status}`);
-      return r.json();
-    })
-    .then((j) => {
-      console.info("[signal] config.json =", j);
-      if (j && j.SIGNAL_URL) cfg.SIGNAL_URL = j.SIGNAL_URL;
-      cfg.ICE_SERVERS = Array.isArray(j?.ICE_SERVERS) && j.ICE_SERVERS.length ? j.ICE_SERVERS : defaultIce;
-      if (Array.isArray(j?.TURN) && j.TURN.length) cfg.ICE_SERVERS = [...cfg.ICE_SERVERS, ...j.TURN];
-    })
-    .catch((e) => console.error("[signal] failed to read config.json:", e));
+  loadConfig();
 
   // ===== Внутреннее состояние =====
   let sws = null;            // WebSocket к сигналингу
