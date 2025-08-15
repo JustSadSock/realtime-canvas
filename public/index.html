@@ -968,18 +968,24 @@
   });
 
   // ===== lobby / rooms =====
-  async function getSignalURL() {
+  let configCache = null;
+  async function loadConfig() {
+    if (configCache) return configCache;
     try {
       const r = await fetch("config.json", { cache: "no-store" });
       if (!r.ok) throw new Error(`config.json HTTP ${r.status}`);
-      const j = await r.json();
-      console.info("[signal] config.json =", j);
-      return j.SIGNAL_URL;
+      configCache = await r.json();
+      console.info("[signal] config.json =", configCache);
+      return configCache;
     } catch (e) {
       console.error("[signal] failed to read config.json:", e);
       alert("Не удалось прочитать config.json. Проверьте деплой и доступность файла.");
       throw e;
     }
+  }
+  async function getSignalURL() {
+    const cfg = await loadConfig();
+    return cfg.SIGNAL_URL;
   }
 
   function normalizeWS(u) {
@@ -994,43 +1000,52 @@
     }
   }
 
+  let roomsWS = null;
+  function ensureRoomsWS(url) {
+    return new Promise((res) => {
+      if (roomsWS && roomsWS.readyState === WebSocket.OPEN) return res(roomsWS);
+      if (roomsWS && roomsWS.readyState === WebSocket.CONNECTING) {
+        roomsWS.addEventListener("open", () => res(roomsWS), { once: true });
+        return;
+      }
+      roomsWS = new WebSocket(url);
+      roomsWS.addEventListener(
+        "open",
+        () => {
+          console.info("[signal] rooms WS open:", url);
+          res(roomsWS);
+        },
+        { once: true }
+      );
+      roomsWS.addEventListener("close", (ev) => {
+        console.warn("[signal] rooms WS closed", ev.code, ev.reason);
+        roomsWS = null;
+      });
+      roomsWS.addEventListener("error", (ev) => {
+        console.error("[signal] rooms WS error", ev);
+      });
+    });
+  }
+
   async function fetchRooms() {
     try {
       const raw = await getSignalURL();
       const url = normalizeWS(raw);
+      const ws = await ensureRoomsWS(url);
       return await new Promise((res) => {
-        const ws = new WebSocket(url);
-        let opened = false;
-        const t = setTimeout(() => {
-          try {
-            ws.close(1000, "done");
-          } catch {}
-          res([]);
-        }, 2000);
-        ws.onopen = () => {
-          opened = true;
-          console.info("[signal] WS open:", url);
-          ws.send(JSON.stringify({ type: "list" }));
-        };
-        ws.onmessage = (e) => {
+        const handler = (e) => {
           const m = JSON.parse(e.data);
           if (m.type === "rooms") {
-            clearTimeout(t);
-            ws.close(1000, "done");
+            ws.removeEventListener("message", handler);
             res(m.rooms || []);
           }
         };
-        ws.onerror = (ev) => {
-          console.error("[signal] WS error", ev);
-          clearTimeout(t);
-          if (!opened) {
-            alert("Подключение к сигнал-серверу не удалось. Проверьте CSP и что URL начинается с wss://");
-          }
+        ws.addEventListener("message", handler);
+        ws.send(JSON.stringify({ type: "list" }));
+        setTimeout(() => {
+          ws.removeEventListener("message", handler);
           res([]);
-        };
-        ws.onclose = (ev) => {
-          console.warn("[signal] WS closed", ev.code, ev.reason);
-        };
+        }, 2000);
       });
     } catch (e) {
       console.error("[signal] fetchRooms failed", e);
