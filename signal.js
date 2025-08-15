@@ -32,6 +32,8 @@ const rooms = new Map();
 const peers = new WeakMap();
 /** @type {Map<string, any>} */
 const roomState = new Map(); // state_save/state_req
+/** @type {Set<string>} */
+const preCreatedRooms = new Set();
 
 // ---------- utils ----------
 function arg(name, def) {
@@ -140,6 +142,7 @@ wss.on("connection", (ws, req) => {
       meta.roomId = roomId;
       peers.set(ws, meta);
       addToRoom(roomId, ws);
+      preCreatedRooms.delete(roomId);
       log(`#${id} joined "${roomId}" (size=${rooms.get(roomId)?.size || 0})`);
       // список пиров, уже находящихся в комнате
       const set = rooms.get(roomId) || new Set();
@@ -180,8 +183,18 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
+    if (msg.type === "create" && msg.roomId) {
+      const roomId = String(msg.roomId);
+      preCreatedRooms.add(roomId);
+      safeSend(ws, { type: "created", roomId });
+      return;
+    }
+
     if (msg.type === "list") {
       const out = [...rooms.entries()].map(([id, set]) => ({ id, users: set.size }));
+      for (const id of preCreatedRooms) {
+        if (!rooms.has(id)) out.push({ id, users: 0 });
+      }
       safeSend(ws, { type: "rooms", rooms: out });
       return;
     }
